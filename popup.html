@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>GDrive Downloader</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #16213e, #0f3460);
+      padding: 14px 16px 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #0f3460;
+    }
+    .header-icon { font-size: 22px; }
+    .header-text h1 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e0e0ff;
+      letter-spacing: 0.3px;
+    }
+    .header-text p {
+      font-size: 10px;
+      color: #7080a0;
+      margin-top: 1px;
+    }
+
+    /* File type badge */
+    .type-section {
+      padding: 12px 16px 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .type-label { font-size: 11px; color: #7080a0; white-space: nowrap; }
+    .type-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #2a2a4a;
+      color: #a0a0c0;
+      transition: all 0.2s;
+    }
+    .type-badge.blob-pdf   { background: #1a3a2a; color: #4caf50; border: 1px solid #2d6b3a; }
+    .type-badge.gdoc       { background: #1a2a4a; color: #64b5f6; border: 1px solid #2a4a7a; }
+    .type-badge.gsheet     { background: #1a3a2a; color: #81c784; border: 1px solid #2d6b3a; }
+    .type-badge.gslides    { background: #3a2020; color: #ef9a9a; border: 1px solid #6b2d2d; }
+    .type-badge.gforms     { background: #3a2a1a; color: #ffcc80; border: 1px solid #7a5a20; }
+    .type-badge.gdrawings  { background: #2a1a3a; color: #ce93d8; border: 1px solid #5a2d7a; }
+    .type-badge.video      { background: #3a1a1a; color: #ff8a80; border: 1px solid #7a2d2d; }
+    .type-badge.audio      { background: #1a2a3a; color: #80cbc4; border: 1px solid #2d5a7a; }
+    .type-badge.image      { background: #3a2a1a; color: #ffe082; border: 1px solid #7a5a20; }
+    .type-badge.file-export{ background: #2a2a2a; color: #b0bec5; border: 1px solid #4a4a4a; }
+    .type-badge.unknown    { background: #2a2a2a; color: #616161; border: 1px solid #3a3a3a; }
+
+    /* PDF Settings */
+    .settings-section {
+      padding: 0 16px 10px;
+      display: none;
+    }
+    .settings-section.visible { display: block; }
+    .settings-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: #5060a0;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+    .setting-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+    .setting-row label {
+      font-size: 11px;
+      color: #8090b0;
+      width: 70px;
+      flex-shrink: 0;
+    }
+    .setting-row input[type="range"] {
+      flex: 1;
+      accent-color: #5272e0;
+      height: 4px;
+    }
+    .setting-val {
+      font-size: 11px;
+      color: #a0b0e0;
+      width: 34px;
+      text-align: right;
+      font-family: monospace;
+    }
+
+    /* Video note */
+    .video-note {
+      margin: 0 16px 10px;
+      padding: 8px 10px;
+      background: #2a1a1a;
+      border-left: 3px solid #ef5350;
+      border-radius: 0 4px 4px 0;
+      font-size: 11px;
+      color: #ef9a9a;
+      line-height: 1.5;
+      display: none;
+    }
+    .video-note.visible { display: block; }
+
+    /* Download button */
+    .btn-section { padding: 0 16px 12px; }
+    #downloadBtn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #5272e0, #3a52c0);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    #downloadBtn:hover:not(:disabled) {
+      background: linear-gradient(135deg, #6282f0, #4a62d0);
+      transform: translateY(-1px);
+    }
+    #downloadBtn:disabled {
+      background: #2a2a4a;
+      color: #4a4a7a;
+      cursor: not-allowed;
+      transform: none;
+    }
+    #downloadBtn.running {
+      background: linear-gradient(135deg, #c0392b, #922b21);
+    }
+    #stopBtn {
+      width: 100%;
+      margin-top: 8px;
+      padding: 9px;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #c0392b, #922b21);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+    #stopBtn:hover {
+      background: linear-gradient(135deg, #e74c3c, #c0392b);
+      transform: translateY(-1px);
+    }
+
+    /* Log */
+    .log-section { padding: 0 16px 14px; }
+    .log-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: #5060a0;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 6px;
+    }
+    #logBox {
+      background: #0d0d1a;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      padding: 8px;
+      height: 110px;
+      overflow-y: auto;
+      font-family: 'Fira Mono', 'Cascadia Code', monospace;
+      font-size: 10.5px;
+      line-height: 1.6;
+      color: #90a0c0;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #logBox .err  { color: #ef5350; }
+    #logBox .ok   { color: #66bb6a; }
+    #logBox .info { color: #42a5f5; }
+    #logBox .warn { color: #ffa726; }
+
+    /* Footer */
+    .footer {
+      padding: 8px 16px;
+      border-top: 1px solid #1e2040;
+      font-size: 10px;
+      color: #3a4060;
+      text-align: center;
+    }
+    .footer a { color: #5060a0; text-decoration: none; }
+    .footer a:hover { color: #7080c0; }
+
+    /* Unsupported page */
+    .unsupported {
+      padding: 20px 16px;
+      text-align: center;
+      color: #5060a0;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .unsupported .icon { font-size: 32px; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-icon">📥</div>
+    <div class="header-text">
+      <h1>GDrive Universal Downloader</h1>
+      <p>v2.5.0 · Auto-detect &amp; download</p>
+    </div>
+  </div>
+
+  <div id="mainContent">
+    <div class="type-section">
+      <span class="type-label">File type:</span>
+      <span class="type-badge unknown" id="typeBadge">⏳ Detecting...</span>
+    </div>
+
+    <!-- PDF settings (shown only for blob-pdf) -->
+    <div class="settings-section" id="pdfSettings">
+      <div class="settings-title">PDF Settings</div>
+      <div class="setting-row">
+        <label>Scale</label>
+        <input type="range" id="scaleSlider" min="0.5" max="2.0" step="0.1" value="1.0">
+        <span class="setting-val" id="scaleVal">1.0</span>
+      </div>
+      <div class="setting-row">
+        <label>Quality</label>
+        <input type="range" id="qualitySlider" min="0.5" max="1.0" step="0.01" value="0.82">
+        <span class="setting-val" id="qualityVal">0.82</span>
+      </div>
+    </div>
+
+    <!-- Video recording note -->
+    <div class="video-note" id="videoNote">
+      ⚠️ YouTube: Records the live stream via MediaRecorder.<br>
+      Keep this tab open. Click <strong>Stop &amp; Download</strong> to finish early.
+    </div>
+
+    <div class="btn-section">
+      <button id="downloadBtn" disabled>
+        <span id="btnIcon">⬇</span>
+        <span id="btnText">Download</span>
+      </button>
+      <button id="stopBtn" style="display:none">
+        <span>⏹</span>
+        <span>Stop &amp; Download</span>
+      </button>
+    </div>
+
+    <div class="log-section">
+      <div class="log-title">Log</div>
+      <div id="logBox"></div>
+    </div>
+  </div>
+
+  <div id="unsupportedContent" style="display:none">
+    <div class="unsupported">
+      <div class="icon">🌐</div>
+      Open a Google Drive or YouTube page<br>then click this extension.
+    </div>
+  </div>
+
+  <div class="footer">
+    <a href="https://github.com/rudinyu/gdrive-universal-downloader" target="_blank">GitHub</a>
+    · MIT License
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
