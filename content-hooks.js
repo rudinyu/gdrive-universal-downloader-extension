@@ -3,10 +3,15 @@
 // before the page has a chance to load them.
 
 (function () {
-  if (window.__gdriveHooksInstalled) return;
-  window.__gdriveHooksInstalled = true;
-  window.__capturedVideoURLs   = new Set();
-  window.__gdriveLog           = [];
+  if (window.__gdriveUniversalDownloader?.hooksInstalled) return;
+
+  window.__gdriveUniversalDownloader = {
+    hooksInstalled: true,
+    capturedVideoURLs: new Set(),
+    log: [],
+    recording: false,
+    settings: {},
+  };
 
   const VIDEO_PATTERNS = [
     /googlevideo\.com/,
@@ -20,7 +25,7 @@
   const isVideoURL = url => VIDEO_PATTERNS.some(p => p.test(url));
   const recordURL  = url => {
     if (url && typeof url === 'string' && isVideoURL(url))
-      window.__capturedVideoURLs.add(url);
+      window.__gdriveUniversalDownloader.capturedVideoURLs.add(url);
   };
 
   // Skip XHR/fetch hooks on YouTube — it uses ytInitialPlayerResponse instead

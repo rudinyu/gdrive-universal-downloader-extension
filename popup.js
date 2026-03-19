@@ -15,43 +15,7 @@ const TYPE_META = {
   'unknown':     { icon: '❓', label: 'Unknown',          pdf: false },
 };
 
-// Detect file type by running detect() logic in MAIN world
-function detectType() {
-  return `(function(){
-    const url = location.href;
-    const blobImgs = [...document.getElementsByTagName('img')]
-      .filter(img => img.src.startsWith('blob:https://drive.google.com/'));
-    if (blobImgs.length > 0) return 'blob-pdf';
-    if (/docs\\.google\\.com\\/document/i.test(url))     return 'gdoc';
-    if (/docs\\.google\\.com\\/spreadsheets/i.test(url)) return 'gsheet';
-    if (/docs\\.google\\.com\\/presentation/i.test(url)) return 'gslides';
-    if (/docs\\.google\\.com\\/forms/i.test(url))        return 'gforms';
-    if (/docs\\.google\\.com\\/drawings/i.test(url))     return 'gdrawings';
-    if (/youtube\\.com\\/watch|youtu\\.be\\//i.test(url)) return 'video';
-    if (document.querySelector('video'))               return 'video';
-    if (document.querySelector('audio'))               return 'audio';
-    if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img'))
-      return 'image';
-    if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe, pre'))
-      return 'text';
-    if (/drive\\.google\\.com\\/file\\/d\\//i.test(url)) return 'file-export';
-    return 'unknown';
-  })()`;
-}
-
-// ── Supported host check ─────────────────────────────────────────
-const SUPPORTED_HOSTS = [
-  'drive.google.com',
-  'docs.google.com',
-  'youtube.com',
-  'www.youtube.com',
-];
-
-function isSupportedHost(url) {
-  try {
-    return SUPPORTED_HOSTS.includes(new URL(url).hostname);
-  } catch { return false; }
-}
+const SUPPORTED_HOSTS = ['drive.google.com', 'docs.google.com', 'youtube.com', 'www.youtube.com'];
 
 // ── DOM refs ─────────────────────────────────────────────────────
 const typeBadge   = document.getElementById('typeBadge');
@@ -69,16 +33,11 @@ const qualityVal  = document.getElementById('qualityVal');
 const mainContent       = document.getElementById('mainContent');
 const unsupportedContent = document.getElementById('unsupportedContent');
 
-// ── Slider display ───────────────────────────────────────────────
-scaleSlider.addEventListener('input', () => {
-  scaleVal.textContent = parseFloat(scaleSlider.value).toFixed(1);
-});
-qualitySlider.addEventListener('input', () => {
-  qualityVal.textContent = parseFloat(qualitySlider.value).toFixed(2);
-});
+let currentTabId = null;
+let pollInterval = null;
 
-// ── Logging ──────────────────────────────────────────────────────
-function appendLog(msg) {
+// ── Helpers ──────────────────────────────────────────────────────
+const appendLog = (msg) => {
   const line = document.createElement('div');
   if (/❌|error/i.test(msg))       line.className = 'err';
   else if (/✅|🎉|Done|saved/i.test(msg)) line.className = 'ok';
@@ -87,68 +46,56 @@ function appendLog(msg) {
   line.textContent = msg;
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
-}
+};
 
-// ── Poll for log updates from page ───────────────────────────────
-let pollInterval = null;
-let currentTabId = null;
+const setBtnState = (running) => {
+  downloadBtn.disabled = running;
+  btnIcon.textContent  = running ? '⏳' : '⬇';
+  btnText.textContent  = running ? 'Running...' : 'Download';
+};
 
-function startPolling(tabId) {
-  stopPolling();
+const startPolling = (tabId) => {
+  if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(async () => {
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'MAIN',
         func: () => {
-          const msgs = window.__gdriveLog || [];
-          window.__gdriveLog = [];
-          return { msgs, recording: !!window.__gdriveRecording };
+          const GUD = window.__gdriveUniversalDownloader || {};
+          const msgs = GUD.log || [];
+          GUD.log = [];
+          return { msgs, recording: !!GUD.recording };
         },
       });
       const { msgs = [], recording = false } = results?.[0]?.result || {};
       msgs.forEach(appendLog);
-
-      // Show/hide stop button based on recording state
       stopBtn.style.display = recording ? 'flex' : 'none';
-
-      // If recording finished, re-enable download button
-      if (!recording && stopBtn.style.display === 'none') {
-        downloadBtn.disabled = false;
-        btnIcon.textContent  = '⬇';
-        btnText.textContent  = 'Download';
+      if (!recording && downloadBtn.disabled && !msgs.some(m => /generating|scrolling/i.test(m))) {
+        // Only re-enable if not obviously busy with PDF
+        if (msgs.some(m => /Done|🎉|❌/i.test(m))) setBtnState(false);
       }
-    } catch (e) {
-      stopPolling();
-    }
-  }, 400);
-}
-
-function stopPolling() {
-  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-}
+    } catch (e) { clearInterval(pollInterval); }
+  }, 500);
+};
 
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !isSupportedHost(tab.url)) {
+  if (!tab || !tab.url || !SUPPORTED_HOSTS.some(h => new URL(tab.url).hostname.includes(h))) {
     mainContent.style.display = 'none';
     unsupportedContent.style.display = 'block';
     return;
   }
-
   currentTabId = tab.id;
 
-  // Detect file type
-  let detectedType = 'unknown';
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
       func: () => {
         const url = location.href;
-        const blobImgs = [...document.getElementsByTagName('img')]
-          .filter(img => img.src.startsWith('blob:https://drive.google.com/'));
+        const blobImgs = [...document.getElementsByTagName('img')].filter(img => img.src.startsWith('blob:https://drive.google.com/'));
         if (blobImgs.length > 0) return 'blob-pdf';
         if (/docs\.google\.com\/document/i.test(url))     return 'gdoc';
         if (/docs\.google\.com\/spreadsheets/i.test(url)) return 'gsheet';
@@ -158,123 +105,70 @@ async function init() {
         if (/youtube\.com\/watch|youtu\.be\//i.test(url)) return 'video';
         if (document.querySelector('video'))               return 'video';
         if (document.querySelector('audio'))               return 'audio';
-        if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img'))
-          return 'image';
-        if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe, pre'))
-          return 'text';
+        if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img')) return 'image';
+        if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe, pre')) return 'text';
         if (/drive\.google\.com\/file\/d\//i.test(url))   return 'file-export';
         return 'unknown';
       },
     });
-    detectedType = results?.[0]?.result || 'unknown';
-  } catch (e) {
-    appendLog('⚠️ Cannot access page. Try refreshing.');
-  }
-
-  // Update badge
-  const meta = TYPE_META[detectedType] || TYPE_META['unknown'];
-  typeBadge.textContent = meta.icon + ' ' + meta.label;
-  typeBadge.className   = 'type-badge ' + detectedType;
-
-  // Show relevant UI sections
-  if (meta.pdf)   pdfSettings.classList.add('visible');
-  if (meta.video) videoNote.classList.add('visible');
-
-  // Enable button unless unknown
-  if (detectedType !== 'unknown') {
-    downloadBtn.disabled = false;
-  } else {
-    appendLog('⚠️ Unknown file type. Open a supported Google Drive page.');
-  }
+    const type = results?.[0]?.result || 'unknown';
+    const meta = TYPE_META[type] || TYPE_META['unknown'];
+    typeBadge.textContent = meta.icon + ' ' + meta.label;
+    typeBadge.className   = 'type-badge ' + type;
+    if (meta.pdf)   pdfSettings.classList.add('visible');
+    if (meta.video) videoNote.classList.add('visible');
+    if (type !== 'unknown') downloadBtn.disabled = false;
+  } catch (e) { appendLog('⚠️ Access denied. Refresh page.'); }
 }
 
-// ── Stop Recording ───────────────────────────────────────────────
-stopBtn.addEventListener('click', async () => {
-  if (!currentTabId) return;
-  stopBtn.disabled = true;
-  stopBtn.querySelector('span:last-child').textContent = 'Stopping...';
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      world: 'MAIN',
-      func: () => {
-        if (typeof window.__stopRecording === 'function') window.__stopRecording();
-      },
-    });
-  } catch (e) {
-    appendLog('❌ Could not stop recording: ' + e.message);
-  } finally {
-    setTimeout(() => {
-      stopBtn.disabled = false;
-      stopBtn.querySelector('span:last-child').textContent = 'Stop & Download';
-    }, 1000);
-  }
-});
+// ── Events ───────────────────────────────────────────────────────
+scaleSlider.addEventListener('input', () => scaleVal.textContent = parseFloat(scaleSlider.value).toFixed(1));
+qualitySlider.addEventListener('input', () => qualityVal.textContent = parseFloat(qualitySlider.value).toFixed(2));
 
-// ── Download ─────────────────────────────────────────────────────
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
-
-  const settings = {
-    scale:       parseFloat(scaleSlider.value),
-    quality:     parseFloat(qualitySlider.value),
-    scrollDelay: 200,
-  };
-
-  downloadBtn.disabled = true;
-  btnIcon.textContent  = '⏳';
-  btnText.textContent  = 'Running...';
-
+  const settings = { scale: parseFloat(scaleSlider.value), quality: parseFloat(qualitySlider.value), scrollDelay: 200 };
+  setBtnState(true);
   logBox.innerHTML = '';
-  appendLog('▶ Starting download...');
+  appendLog('▶ Starting...');
 
   try {
-    // Step 1: Push settings to page
+    // 1. Initialize namespace and settings
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
       func: (s) => {
-        window.__gdriveSettings = s;
-        window.__gdriveLog      = [];
+        window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || { capturedVideoURLs: new Set() };
+        window.__gdriveUniversalDownloader.settings = s;
+        window.__gdriveUniversalDownloader.log = [];
       },
       args: [settings],
     });
 
-    // Step 2: Inject downloader
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      world: 'MAIN',
-      files:  ['downloader.js'],
-    });
+    // 2. Inject dependencies (Local only)
+    const type = typeBadge.className.split(' ').pop();
+    if (type === 'blob-pdf') {
+      await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
+    }
 
-    // Start polling for logs + recording state
+    // 3. Inject downloader
+    await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['downloader.js'] });
     startPolling(currentTabId);
 
-    // For non-video types, re-enable button quickly
-    // For video (recording), the stop button takes over — polling handles re-enable
-    setTimeout(async () => {
-      const isRecording = await chrome.scripting.executeScript({
-        target: { tabId: currentTabId },
-        world: 'MAIN',
-        func: () => !!window.__gdriveRecording,
-      }).then(r => r?.[0]?.result).catch(() => false);
-
-      if (!isRecording) {
-        downloadBtn.disabled = false;
-        btnIcon.textContent  = '⬇';
-        btnText.textContent  = 'Download';
-      }
-    }, 3000);
-
   } catch (err) {
-    appendLog('❌ Injection failed: ' + err.message);
-    downloadBtn.disabled = false;
-    btnIcon.textContent  = '⬇';
-    btnText.textContent  = 'Download';
+    appendLog('❌ Failed: ' + err.message);
+    setBtnState(false);
   }
 });
 
-// Cleanup on popup close
-window.addEventListener('unload', stopPolling);
+stopBtn.addEventListener('click', async () => {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      world: 'MAIN',
+      func: () => window.__gdriveUniversalDownloader?.stopRecording?.(),
+    });
+  } catch (e) { appendLog('❌ Stop failed.'); }
+});
 
 init();
