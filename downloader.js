@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v2.5.1 — Injected Logic
+// GDrive Universal Downloader v2.5.2 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -17,7 +17,7 @@
 
   const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
 
-  log('🚀 GUD v2.5.1 starting...');
+  log('🚀 GUD v2.5.2 starting...');
 
   // ── Utilities ───────────────────────────────────────────────────
   const getTitle = () => {
