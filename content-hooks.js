@@ -31,14 +31,11 @@
   // Skip XHR/fetch hooks on YouTube — it uses ytInitialPlayerResponse instead
   if (!/youtube\.com|youtu\.be/i.test(location.href)) {
     const OrigXHR = XMLHttpRequest;
-    function HookedXHR() {
-      const xhr  = new OrigXHR();
-      const orig = xhr.open.bind(xhr);
-      xhr.open   = (m, u, ...a) => { recordURL(u); return orig(m, u, ...a); };
-      return xhr;
-    }
-    HookedXHR.prototype = OrigXHR.prototype;
-    window.XMLHttpRequest = HookedXHR;
+    const origOpen = OrigXHR.prototype.open;
+    OrigXHR.prototype.open = function (m, u, ...a) {
+      recordURL(u);
+      return origOpen.call(this, m, u, ...a);
+    };
 
     const origFetch = fetch;
     window.fetch = (input, ...a) => {

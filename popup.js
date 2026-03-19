@@ -34,15 +34,22 @@ const mainContent       = document.getElementById('mainContent');
 const unsupportedContent = document.getElementById('unsupportedContent');
 
 let currentTabId = null;
+let currentType  = 'unknown';
 let pollInterval = null;
 
 // ── Helpers ──────────────────────────────────────────────────────
+const LOG_LEVELS = [
+  { cls: 'err',  patterns: [/\u274C/, /error/i] },
+  { cls: 'ok',   patterns: [/\u2705/, /\uD83C\uDF89/, /Done/i, /saved/i] },
+  { cls: 'warn', patterns: [/\u26A0/, /warn/i] },
+  { cls: 'info', patterns: [/\uD83D\uDD0D/, /\uD83D\uDCFA/, /\uD83D\uDE80/, /\uD83D\uDCC4/, /\uD83D\uDD34/] },
+];
+
 const appendLog = (msg) => {
   const line = document.createElement('div');
-  if (/❌|error/i.test(msg))       line.className = 'err';
-  else if (/✅|🎉|Done|saved/i.test(msg)) line.className = 'ok';
-  else if (/⚠️|warn/i.test(msg))   line.className = 'warn';
-  else if (/🔍|📺|🚀|📄|🔴/i.test(msg)) line.className = 'info';
+  for (const { cls, patterns } of LOG_LEVELS) {
+    if (patterns.some(p => p.test(msg))) { line.className = cls; break; }
+  }
   line.textContent = msg;
   logBox.appendChild(line);
   logBox.scrollTop = logBox.scrollHeight;
@@ -72,10 +79,13 @@ const startPolling = (tabId) => {
       msgs.forEach(appendLog);
       stopBtn.style.display = recording ? 'flex' : 'none';
       if (!recording && downloadBtn.disabled && !msgs.some(m => /generating|scrolling/i.test(m))) {
-        // Only re-enable if not obviously busy with PDF
-        if (msgs.some(m => /Done|🎉|❌/i.test(m))) setBtnState(false);
+        if (msgs.some(m => /Done|🎉|❌|⚠️ Auto-detect failed/i.test(m))) {
+          setBtnState(false);
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
       }
-    } catch (e) { clearInterval(pollInterval); }
+    } catch (e) { clearInterval(pollInterval); pollInterval = null; }
   }, 500);
 };
 
@@ -90,28 +100,19 @@ async function init() {
   currentTabId = tab.id;
 
   try {
+    // Inject shared detection script and read result
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      files: ['detect.js'],
+    });
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
-      func: () => {
-        const url = location.href;
-        const blobImgs = [...document.getElementsByTagName('img')].filter(img => img.src.startsWith('blob:https://drive.google.com/'));
-        if (blobImgs.length > 0) return 'blob-pdf';
-        if (/docs\.google\.com\/document/i.test(url))     return 'gdoc';
-        if (/docs\.google\.com\/spreadsheets/i.test(url)) return 'gsheet';
-        if (/docs\.google\.com\/presentation/i.test(url)) return 'gslides';
-        if (/docs\.google\.com\/forms/i.test(url))        return 'gforms';
-        if (/docs\.google\.com\/drawings/i.test(url))     return 'gdrawings';
-        if (/youtube\.com\/watch|youtu\.be\//i.test(url)) return 'video';
-        if (document.querySelector('video'))               return 'video';
-        if (document.querySelector('audio'))               return 'audio';
-        if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img')) return 'image';
-        if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe, pre')) return 'text';
-        if (/drive\.google\.com\/file\/d\//i.test(url))   return 'file-export';
-        return 'unknown';
-      },
+      func: () => window.__gdriveUniversalDownloader?.detectedType || 'unknown',
     });
     const type = results?.[0]?.result || 'unknown';
+    currentType = type;
     const meta = TYPE_META[type] || TYPE_META['unknown'];
     typeBadge.textContent = meta.icon + ' ' + meta.label;
     typeBadge.className   = 'type-badge ' + type;
@@ -145,9 +146,13 @@ downloadBtn.addEventListener('click', async () => {
       args: [settings],
     });
 
-    // 2. Inject dependencies (Local only)
-    const type = typeBadge.className.split(' ').pop();
-    if (type === 'blob-pdf') {
+    // 2. Re-run detection and inject dependencies
+    await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      world: 'MAIN',
+      files: ['detect.js'],
+    });
+    if (currentType === 'blob-pdf') {
       await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
     }
 

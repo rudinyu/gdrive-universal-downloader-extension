@@ -2,7 +2,8 @@
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
-  const GUD = window.__gdriveUniversalDownloader || {};
+  const GUD = window.__gdriveUniversalDownloader;
+  if (!GUD) { console.warn('GUD namespace missing — hooks not installed.'); return; }
   const cfg = GUD.settings || {};
   const SCALE        = cfg.scale       ?? 1.0;
   const QUALITY      = cfg.quality     ?? 0.82;
@@ -24,7 +25,7 @@
     const raw  = meta || document.title;
     return raw
       .replace(/\s*[-–—]\s*Google.*/i, '')
-      .replace(/\.\w{2,5}$/, '')
+      .replace(/\.(pdf|docx?|xlsx?|pptx?|csv|svg|txt|mp[34]|webm|jpe?g|png|gif|zip|rar)$/i, '')
       .trim() || 'gdrive-file';
   };
 
@@ -44,9 +45,8 @@
       document.querySelector('.ndfHFb-c4YZDc-cYSp0e-DARUcf') ||
       document.querySelector('[role="main"]') ||
       document.documentElement;
-    const total = scrollable.scrollHeight;
     const step  = window.innerHeight;
-    for (let pos = 0; pos <= total; pos += step) {
+    for (let pos = 0; pos <= scrollable.scrollHeight; pos += step) {
       scrollable.scrollTo(0, pos);
       await sleep(SCROLL_DELAY);
     }
@@ -55,27 +55,8 @@
     log('✅ Scroll complete');
   };
 
-  // ── File Type Detection (Re-run for certainty) ──────────────────
+  // ── File Type Detection (uses detect.js result) ─────────────────
   const url = window.location.href;
-  const detect = () => {
-    const blobImgs = [...document.getElementsByTagName('img')]
-      .filter(img => img.src.startsWith('blob:https://drive.google.com/'));
-    if (blobImgs.length > 0) return 'blob-pdf';
-    if (/docs\.google\.com\/document/i.test(url))     return 'gdoc';
-    if (/docs\.google\.com\/spreadsheets/i.test(url)) return 'gsheet';
-    if (/docs\.google\.com\/presentation/i.test(url)) return 'gslides';
-    if (/docs\.google\.com\/forms/i.test(url))        return 'gforms';
-    if (/docs\.google\.com\/drawings/i.test(url))     return 'gdrawings';
-    if (/youtube\.com\/watch|youtu\.be\//i.test(url)) return 'video';
-    if (document.querySelector('video'))               return 'video';
-    if (document.querySelector('audio'))               return 'audio';
-    if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img'))
-      return 'image';
-    if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe, pre'))
-      return 'text';
-    if (/drive\.google\.com\/file\/d\//i.test(url))   return 'file-export';
-    return 'unknown';
-  };
 
   // ── Strategy: Video ─────────────────────────────────────────────
   const processVideo = async () => {
@@ -106,11 +87,10 @@
         }, 300);
       };
 
-      videoEl.play().catch(() => {});
+      videoEl.play().catch(e => log('⚠️ Playback error: ' + e.message));
       recorder.start(1000);
       log('🔴 Recording started (' + mimeType + ')');
       GUD.recording = true;
-
       GUD.stopRecording = () => {
         if (recorder.state === 'inactive') return;
         recorder.requestData();
@@ -134,7 +114,7 @@
 
     if (capturedVideoURLs.size === 0) {
       log('⏳ Triggering playback to capture URL...');
-      if (videoEl) videoEl.play().catch(() => {});
+      if (videoEl) videoEl.play().catch(e => log('⚠️ Playback error: ' + e.message));
       for (let i = 0; i < 10; i++) {
         await sleep(500);
         if (capturedVideoURLs.size > 0) break;
@@ -189,7 +169,7 @@
   };
 
   // ── Execution ───────────────────────────────────────────────────
-  const type  = detect();
+  const type  = GUD.detectedType || 'unknown';
   const title = getTitle();
   const getId = () => url.match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1];
 
@@ -225,7 +205,9 @@
   if (type === 'text') {
     const content = document.querySelector('.drive-viewer-text-container, pre')?.innerText ?? document.body.innerText;
     const blob    = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    triggerDownload(URL.createObjectURL(blob), title + '.txt');
+    const blobUrl = URL.createObjectURL(blob);
+    triggerDownload(blobUrl, title + '.txt');
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     log('📋 Saving text file...');
     return;
   }
@@ -233,7 +215,7 @@
   if (type === 'file-export') {
     const id = getId();
     if (!id) { log('❌ ID missing'); return; }
-    triggerDownload(`https://drive.google.com/uc?export=download&id=${id}`, title + '.pdf');
+    triggerDownload(`https://drive.google.com/uc?export=download&id=${id}`, title);
     log('📁 Requesting file download...');
     return;
   }
