@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GDrive Universal Downloader",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Download Google Drive files: view-only PDFs, Docs, Sheets, Slides, videos & more.",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": [
