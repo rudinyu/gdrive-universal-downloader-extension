@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build extension zip
+        run: |
+          ZIP_NAME="gdrive-universal-downloader-v${{ steps.version.outputs.VERSION }}.zip"
+          zip -r "$ZIP_NAME" \
+            manifest.json \
+            popup.html \
+            popup.js \
+            downloader.js \
+            detect.js \
+            content-hooks.js \
+            icons/ \
+            lib/ \
+            LICENSE
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Extract changelog for this version
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          sed -n "/^## \[$VERSION\]/,/^## \[/{/^## \[$VERSION\]/d;/^## \[/d;p;}" CHANGELOG.md > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP_NAME }}
+          body_path: /tmp/release-notes.md
