@@ -2,8 +2,14 @@
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
-  const GUD = window.__gdriveUniversalDownloader;
-  if (!GUD) { console.warn('GUD namespace missing — hooks not installed.'); return; }
+  let GUD = window.__gdriveUniversalDownloader;
+  if (!GUD) {
+    // Namespace missing (page not refreshed after extension update).
+    // Create a minimal object so the error is visible in the popup log.
+    window.__gdriveUniversalDownloader = { log: ['❌ Reload the page and try again (extension was updated).'], runComplete: true };
+    console.warn('[GUD] Namespace missing — reload the page.');
+    return;
+  }
   const cfg = GUD.settings || {};
   const SCALE        = cfg.scale       ?? 1.0;
   const QUALITY      = cfg.quality     ?? 0.82;

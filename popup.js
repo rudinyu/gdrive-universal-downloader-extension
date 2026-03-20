@@ -69,8 +69,23 @@ const setBtnState = (running) => {
   }
 };
 
+let pollTimeout = null;
+
+const stopPolling = () => {
+  clearInterval(pollInterval); pollInterval = null;
+  clearTimeout(pollTimeout);   pollTimeout  = null;
+};
+
 const startPolling = (tabId) => {
-  if (pollInterval) clearInterval(pollInterval);
+  stopPolling();
+
+  // Safety net: re-enable the button after 90 s even if nothing completes
+  pollTimeout = setTimeout(() => {
+    appendLog('⚠️ Timeout — check your browser downloads or reload the page.');
+    setBtnState(false);
+    stopPolling();
+  }, 90000);
+
   pollInterval = setInterval(async () => {
     try {
       const results = await chrome.scripting.executeScript({
@@ -89,11 +104,10 @@ const startPolling = (tabId) => {
       if (!recording && downloadBtn.disabled && (runComplete || !msgs.some(m => /generating|scrolling/i.test(m)))) {
         if (runComplete || msgs.some(m => /Done|🎉|❌|⚠️ Auto-detect failed/i.test(m))) {
           setBtnState(false);
-          clearInterval(pollInterval);
-          pollInterval = null;
+          stopPolling();
         }
       }
-    } catch (e) { clearInterval(pollInterval); pollInterval = null; }
+    } catch (e) { stopPolling(); }
   }, 500);
 };
 
@@ -285,18 +299,24 @@ downloadBtn.addEventListener('click', async () => {
       }
     }
 
-    // 1. Initialize namespace — set detectedType directly so detect.js re-injection
-    //    cannot clobber it (e.g. lazy-loaded images have naturalWidth=0 on re-scan).
+    // 1. Rebuild GUD as a brand-new object so downloader.js and polling
+    //    always share the same reference (avoids stale-reference log blackout).
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
       func: (s, sel, type) => {
-        window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || { capturedVideoURLs: new Set() };
-        window.__gdriveUniversalDownloader.settings          = s;
-        window.__gdriveUniversalDownloader.log               = [];
-        window.__gdriveUniversalDownloader.runComplete       = false;
-        window.__gdriveUniversalDownloader.selectedResources = sel;
-        window.__gdriveUniversalDownloader.detectedType      = type;
+        const prev    = window.__gdriveUniversalDownloader;
+        const prevSet = prev?.capturedVideoURLs instanceof Set ? prev.capturedVideoURLs : new Set();
+        window.__gdriveUniversalDownloader = {
+          hooksInstalled:    !!(prev?.hooksInstalled),
+          capturedVideoURLs: prevSet,
+          log:               [],
+          recording:         false,
+          runComplete:       false,
+          settings:          s,
+          selectedResources: sel,
+          detectedType:      type,
+        };
       },
       args: [settings, selectedResources, currentType],
     });
