@@ -43,7 +43,9 @@ const unsupportedContent = document.getElementById('unsupportedContent');
 let currentTabId          = null;
 let currentType           = 'unknown';
 let pollInterval          = null;
-let selectedYoutubeFormat = null; // { url, qualityLabel, mimeType } | { mediarecorder: true }
+// { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
+// | { type:'direct', url, qualityLabel, mimeType, sizeMB }
+let selectedYoutubeFormat = null;
 
 // ── Helpers ──────────────────────────────────────────────────────
 const LOG_LEVELS = [
@@ -198,9 +200,10 @@ const renderResourcePicker = (resources) => {
 };
 
 // ── YouTube quality picker ───────────────────────────────────────
+// formats = video-only adaptive streams (for quality labels & direct dl)
 const renderYoutubeFormatPicker = (formats) => {
   youtubeFormatPicker.style.display = 'block';
-  videoNote.classList.remove('visible'); // replaced by picker
+  videoNote.classList.remove('visible');
   youtubeFormatList.innerHTML = '';
   selectedYoutubeFormat = null;
 
@@ -239,35 +242,68 @@ const renderYoutubeFormatPicker = (formats) => {
       radio.checked = true;
       selectedYoutubeFormat = value;
       downloadBtn.disabled = false;
-      youtubeFormatLabel.textContent = typeof value === 'object' && value.qualityLabel
-        ? value.qualityLabel + ' selected'
-        : 'MediaRecorder selected';
+      youtubeFormatLabel.textContent = value.type === 'direct'
+        ? value.qualityLabel + ' (video only)'
+        : value.qualityLabel + ' (MediaRecorder)';
     };
     div.addEventListener('click', select);
     if (isFirst) select();
   };
 
-  let firstAdaptiveSeen = false;
-  formats.forEach((f, i) => {
-    // Insert separator before first video-only entry
-    if (f.videoOnly && !firstAdaptiveSeen) {
-      firstAdaptiveSeen = true;
-      const sep = document.createElement('div');
-      sep.className   = 'resource-section-header';
-      sep.textContent = 'Video only (no audio)';
-      youtubeFormatList.appendChild(sep);
-    }
-    const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
-    const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
-    const badge = f.height >= 1080
+  // ── Section 1: With Audio via MediaRecorder ──────────────────────
+  const mrHeader = document.createElement('div');
+  mrHeader.className   = 'resource-section-header';
+  mrHeader.textContent = 'With Audio (MediaRecorder)';
+  youtubeFormatList.appendChild(mrHeader);
+
+  // Maps pixel height to YouTube player quality name
+  const ytQ = (h) => {
+    if (h >= 2160) return 'hd2160';
+    if (h >= 1440) return 'hd1440';
+    if (h >= 1080) return 'hd1080';
+    if (h >= 720)  return 'hd720';
+    if (h >= 480)  return 'large';
+    if (h >= 360)  return 'medium';
+    return 'small';
+  };
+
+  // Auto — no quality change, record whatever is currently playing
+  addItem('🎥',
+    'Auto <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">current quality</span>',
+    'MediaRecorder · keep tab open',
+    { type: 'mediarecorder', quality: 'auto', qualityLabel: 'Auto' },
+    true);
+
+  // One entry per unique height, sorted high → low
+  const heights = [...new Set(formats.map(f => f.height))].sort((a, b) => b - a);
+  heights.forEach(h => {
+    const badge = h >= 1080
       ? ` <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">HD</span>`
-      : f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
-    addItem('🎬', f.qualityLabel + badge, `${ext}  ${size}`, f, i === 0);
+      : h >= 720 ? ' <span class="format-badge">HD</span>' : '';
+    addItem('🎥', `${h}p${badge}`,
+      'MediaRecorder · keep tab open',
+      { type: 'mediarecorder', quality: ytQ(h), qualityLabel: `${h}p`, height: h },
+      false);
   });
 
-  // MediaRecorder option (1080p+)
-  addItem('🎥', 'Record live <span class="format-badge" style="background:#2a1a3a;color:#ce93d8">1080p+</span>',
-    'MediaRecorder · keep tab open', { mediarecorder: true }, formats.length === 0);
+  // ── Section 2: Video Only (direct download) ──────────────────────
+  if (formats.length > 0) {
+    const voHeader = document.createElement('div');
+    voHeader.className   = 'resource-section-header';
+    voHeader.textContent = 'Video Only (no audio)';
+    youtubeFormatList.appendChild(voHeader);
+
+    formats.forEach(f => {
+      const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
+      const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
+      const badge = f.height >= 1080
+        ? ` <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">HD</span>`
+        : f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
+      addItem('🎬', f.qualityLabel + badge, `${ext}  ${size} · no audio`,
+        { type: 'direct', url: f.url, qualityLabel: f.qualityLabel, mimeType: f.mimeType, sizeMB: f.sizeMB },
+        false);
+    });
+  }
 };
 
 // ── Init ─────────────────────────────────────────────────────────
@@ -294,30 +330,22 @@ async function init() {
         let youtubeFormats = null;
         if (/youtube\.com\/watch|youtu\.be\//i.test(location.href)) {
           const sd = window.ytInitialPlayerResponse?.streamingData || {};
-          // A format has audio if its mimeType codec list includes an audio codec
           const hasAudio = f => /mp4a|opus|vorbis/i.test(f.mimeType || '');
-          const toEntry = (f, videoOnly) => ({
+          const toEntry = (f) => ({
             url:          f.url,
             qualityLabel: f.qualityLabel || '?',
             height:       f.height || 0,
             mimeType:     (f.mimeType || '').split(';')[0],
             sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
-            videoOnly:    !!videoOnly,
           });
-          // Muxed streams — only entries confirmed to carry audio
-          const muxed = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
-            .filter(f => f.url && f.mimeType?.startsWith('video/') && hasAudio(f))
-            .map(f => toEntry(f, false))
-            .sort((a, b) => b.height - a.height);
-          // Video-only streams — all resolutions, deduped by qualityLabel
+          // Video-only adaptive streams — deduped by qualityLabel, sorted high→low
           const seen = new Set();
           const adaptive = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
             .filter(f => f.url && f.mimeType?.startsWith('video/') && !hasAudio(f))
-            .map(f => toEntry(f, true))
+            .map(toEntry)
             .sort((a, b) => b.height - a.height)
             .filter(f => { if (seen.has(f.qualityLabel)) return false; seen.add(f.qualityLabel); return true; });
-          const all = [...muxed, ...adaptive];
-          if (all.length > 0) youtubeFormats = all;
+          youtubeFormats = adaptive; // always an array (may be empty)
         }
         return {
           type: GUD.detectedType || 'unknown',
@@ -352,7 +380,7 @@ async function init() {
       return;
     }
 
-    if (currentType === 'video' && youtubeFormats?.length > 0) {
+    if (currentType === 'video' && youtubeFormats !== null) {
       renderYoutubeFormatPicker(youtubeFormats);
     } else if (currentType === 'universal' && resources) {
       renderResourcePicker(resources);
@@ -381,8 +409,8 @@ selectNoneBtn.addEventListener('click', () => {
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
 
-  // ── YouTube direct download (muxed formats ≤720p) ────────────────
-  if (currentType === 'video' && selectedYoutubeFormat && !selectedYoutubeFormat.mediarecorder) {
+  // ── YouTube video-only direct download ───────────────────────────
+  if (currentType === 'video' && selectedYoutubeFormat?.type === 'direct') {
     setBtnState(true);
     logBox.innerHTML = '';
     try {
@@ -394,7 +422,7 @@ downloadBtn.addEventListener('click', async () => {
         .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 180) || 'video';
       const ext      = selectedYoutubeFormat.mimeType === 'video/webm' ? 'webm' : 'mp4';
       const filename = safeTitle + '.' + ext;
-      appendLog(`⬇ Downloading ${selectedYoutubeFormat.qualityLabel} ${ext.toUpperCase()}...`);
+      appendLog(`⬇ Downloading ${selectedYoutubeFormat.qualityLabel} ${ext.toUpperCase()} (no audio)...`);
       await chrome.downloads.download({ url: selectedYoutubeFormat.url, filename });
       appendLog('✅ Check your downloads folder.');
     } catch (err) {
@@ -463,6 +491,24 @@ downloadBtn.addEventListener('click', async () => {
       },
     });
     appendLog('🔍 GUD: ' + (diagResult?.[0]?.result ?? 'no result'));
+
+    // ── Step 1b: set YouTube player quality for MediaRecorder ────────
+    if (currentType === 'video' && selectedYoutubeFormat?.type === 'mediarecorder'
+        && selectedYoutubeFormat.quality !== 'auto') {
+      appendLog(`🎬 Setting quality to ${selectedYoutubeFormat.qualityLabel}...`);
+      await chrome.scripting.executeScript({
+        target: { tabId: currentTabId }, world: 'MAIN',
+        func: (q) => {
+          try {
+            const player = document.getElementById('movie_player');
+            if (player?.setPlaybackQualityRange) player.setPlaybackQualityRange(q, q);
+          } catch (e) { /* ignore */ }
+        },
+        args: [selectedYoutubeFormat.quality],
+      });
+      // Wait for player to switch quality before MediaRecorder captures it
+      await new Promise(r => setTimeout(r, 2000));
+    }
 
     // ── Step 2: inject libraries ─────────────────────────────────────
     if (currentType === 'blob-pdf') {

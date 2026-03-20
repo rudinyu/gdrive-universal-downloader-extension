@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-03-20
+
+### Changed
+- **YouTube quality picker redesign**: MediaRecorder (audio + video) is now the primary section with quality choices (Auto, 360p, 480p, 720p, 1080p, etc.). Selecting a specific quality calls `#movie_player.setPlaybackQualityRange(q, q)` before recording starts so the captured stream is at the chosen resolution. "Video Only (no audio)" direct-download options remain as a secondary section.
+- Removed the broken "muxed" stream section — YouTube no longer serves true muxed (audio+video) streams at any resolution; all direct URLs are video-only.
+
 ## [3.2.2] - 2026-03-20
 
 ### Fixed
