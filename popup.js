@@ -72,14 +72,14 @@ const startPolling = (tabId) => {
           const GUD = window.__gdriveUniversalDownloader || {};
           const msgs = GUD.log || [];
           GUD.log = [];
-          return { msgs, recording: !!GUD.recording };
+          return { msgs, recording: !!GUD.recording, runComplete: !!GUD.runComplete };
         },
       });
-      const { msgs = [], recording = false } = results?.[0]?.result || {};
+      const { msgs = [], recording = false, runComplete = false } = results?.[0]?.result || {};
       msgs.forEach(appendLog);
       stopBtn.style.display = recording ? 'flex' : 'none';
-      if (!recording && downloadBtn.disabled && !msgs.some(m => /generating|scrolling/i.test(m))) {
-        if (msgs.some(m => /Done|🎉|❌|⚠️ Auto-detect failed/i.test(m))) {
+      if (!recording && downloadBtn.disabled && (runComplete || !msgs.some(m => /generating|scrolling/i.test(m)))) {
+        if (runComplete || msgs.some(m => /Done|🎉|❌|⚠️ Auto-detect failed/i.test(m))) {
           setBtnState(false);
           clearInterval(pollInterval);
           pollInterval = null;
@@ -142,6 +142,7 @@ downloadBtn.addEventListener('click', async () => {
         window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || { capturedVideoURLs: new Set() };
         window.__gdriveUniversalDownloader.settings = s;
         window.__gdriveUniversalDownloader.log = [];
+        window.__gdriveUniversalDownloader.runComplete = false;
       },
       args: [settings],
     });

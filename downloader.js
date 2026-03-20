@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v2.5.2 — Injected Logic
+// GDrive Universal Downloader v2.5.3 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -16,8 +16,63 @@
   };
 
   const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
+  GUD.runComplete = false;
+  const markComplete = () => { GUD.runComplete = true; };
 
-  log('🚀 GUD v2.5.2 starting...');
+  const MIME_EXTENSION_MAP = {
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+    'video/quicktime': 'mov',
+    'video/x-matroska': 'mkv',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+    'audio/wav': 'wav',
+    'audio/ogg': 'ogg',
+    'audio/webm': 'webm',
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+  };
+
+  const normalizeExt = (ext, fallback = 'bin') => {
+    const val = (ext || '').replace(/^\./, '').toLowerCase();
+    return val || fallback;
+  };
+
+  const getExtensionFromMime = (mime = '') => MIME_EXTENSION_MAP[mime.toLowerCase()] || null;
+
+  const getExtensionFromURL = (url = '') => {
+    if (!url) return null;
+    try {
+      const pathname = new URL(url, location.href).pathname;
+      const match = pathname.match(/\.([a-z0-9]{2,5})$/i);
+      if (match) return match[1].toLowerCase();
+    } catch (e) { /* ignore */ }
+    const bare = url.split('?')[0].split('#')[0];
+    const match = bare.match(/\.([a-z0-9]{2,5})$/i);
+    if (match) return match[1].toLowerCase();
+    const mimeParam = url.match(/mime=([^&]+)/i);
+    if (mimeParam) {
+      const guessed = getExtensionFromMime(decodeURIComponent(mimeParam[1]));
+      if (guessed) return guessed;
+    }
+    return null;
+  };
+
+  const inferExtension = (url, mime, fallback) =>
+    normalizeExt(getExtensionFromMime(mime) || getExtensionFromURL(url) || fallback, fallback);
+
+  const getMediaSourceInfo = (el) => {
+    if (!el) return { src: null, type: null };
+    const sources = [...(el.querySelectorAll?.('source') || [])];
+    const src = el.currentSrc || el.src || sources.find(s => s.src)?.src || null;
+    const activeSource = sources.find(s => s.src === el.currentSrc) || sources.find(s => s.type);
+    const type = (el.getAttribute?.('type') || activeSource?.getAttribute?.('type') || activeSource?.type || '').toLowerCase();
+    return { src, type };
+  };
+
+  log('🚀 GUD v2.5.3 starting...');
 
   // ── Utilities ───────────────────────────────────────────────────
   const getTitle = () => {
@@ -64,12 +119,12 @@
     if (/youtube\.com\/watch|youtu\.be\//i.test(url)) {
       log('📺 YouTube detected — using MediaRecorder capture...');
       const videoEl = document.querySelector('video');
-      if (!videoEl) { log('❌ No video element found.'); return; }
+      if (!videoEl) { log('❌ No video element found.'); markComplete(); return; }
       let stream;
       try {
         stream = videoEl.captureStream?.() || videoEl.mozCaptureStream?.();
-      } catch (e) { log('❌ captureStream() failed: ' + e.message); return; }
-      if (!stream) { log('❌ captureStream() not supported.'); return; }
+      } catch (e) { log('❌ captureStream() failed: ' + e.message); markComplete(); return; }
+      if (!stream) { log('❌ captureStream() not supported.'); markComplete(); return; }
 
       const mimeType = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
         .find(t => MediaRecorder.isTypeSupported(t)) || 'video/webm';
@@ -78,12 +133,13 @@
       recorder.ondataavailable = e => { if (e.data?.size > 0) chunks.push(e.data); };
       recorder.onstop = () => {
         setTimeout(() => {
-          if (chunks.length === 0) { log('❌ No data recorded.'); return; }
+          if (chunks.length === 0) { log('❌ No data recorded.'); markComplete(); return; }
           const blob    = new Blob(chunks, { type: 'video/webm' });
           const blobUrl = URL.createObjectURL(blob);
           triggerDownload(blobUrl, title + '.webm');
           setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
           log('✅ Recording saved: ' + title + '.webm');
+          markComplete();
         }, 300);
       };
 
@@ -102,10 +158,13 @@
 
     const isVideoURL = u => [/googlevideo\.com/, /\.m3u8/, /\.mpd/, /videoplayback/, /mime=video/, /itag=\d+/].some(p => p.test(u));
     const videoEl = document.querySelector('video');
-    const domSrc  = videoEl?.src || videoEl?.querySelector('source[src]')?.src;
+    const videoInfo = getMediaSourceInfo(videoEl);
+    const domSrc  = videoInfo.src;
     if (domSrc && !domSrc.startsWith('blob:')) {
-      triggerDownload(domSrc, title + '.mp4');
-      log('🎬 Downloading direct MP4...');
+      const ext = inferExtension(domSrc, videoInfo.type, 'mp4');
+      triggerDownload(domSrc, `${title}.${ext}`);
+      log(`🎬 Downloading direct ${ext.toUpperCase()}...`);
+      markComplete();
       return;
     }
 
@@ -121,15 +180,19 @@
       }
     }
 
-    if (capturedVideoURLs.size === 0) { log('⚠️ No stream URLs captured.'); return; }
+    if (capturedVideoURLs.size === 0) { log('⚠️ No stream URLs captured.'); markComplete(); return; }
     const urls      = [...capturedVideoURLs];
     const directMp4 = urls.filter(u => /\.(mp4|webm)/i.test(u) || /mime=video/i.test(u));
     if (directMp4.length > 0) {
-      triggerDownload(directMp4.sort((a,b) => b.length - a.length)[0], title + '.mp4');
-      log('🎬 Downloading captured MP4...');
+      const best = directMp4.sort((a,b) => b.length - a.length)[0];
+      const ext = inferExtension(best, '', 'mp4');
+      triggerDownload(best, `${title}.${ext}`);
+      log(`🎬 Downloading captured ${ext.toUpperCase()}...`);
+      markComplete();
       return;
     }
     log('⚠️ Segmented stream detected (cannot download directly).');
+    markComplete();
   };
 
   // ── Strategy: View-Only PDF ─────────────────────────────────────
@@ -138,10 +201,10 @@
     const blobImgs = [...document.getElementsByTagName('img')]
       .filter(img => img.src.startsWith('blob:https://drive.google.com/'));
 
-    if (blobImgs.length === 0) { log('❌ No page images found.'); return; }
+    if (blobImgs.length === 0) { log('❌ No page images found.'); markComplete(); return; }
     log('📄 Found ' + blobImgs.length + ' pages. Generating PDF...');
 
-    if (!window.jspdf) { log('❌ jsPDF library not found on page.'); return; }
+    if (!window.jspdf) { log('❌ jsPDF library not found on page.'); markComplete(); return; }
     const { jsPDF } = window.jspdf;
 
     let pdf = null;
@@ -166,6 +229,7 @@
     const filename = getTitle() + '.pdf';
     await pdf.save(filename, { returnPromise: true });
     log('🎉 Done! Saved as ' + filename);
+    markComplete();
   };
 
   // ── Execution ───────────────────────────────────────────────────
@@ -187,18 +251,22 @@
 
   if (exports[type]) {
     const id = getId();
-    if (!id) { log('❌ ID missing'); return; }
+    if (!id) { log('❌ ID missing'); markComplete(); return; }
     triggerDownload(`https://docs.google.com/${exports[type].path}${id}${exports[type].q}`, `${title}.${exports[type].ext}`);
     log(`📝 Exporting → ${exports[type].ext}`);
+    markComplete();
     return;
   }
 
   if (type === 'audio' || type === 'image') {
     const el = document.querySelector(type === 'audio' ? 'audio' : 'img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img');
-    const src = el?.src || el?.querySelector('source[src]')?.src;
-    if (!src) { log('⚠️ No source found'); return; }
-    triggerDownload(src, title + (type === 'audio' ? '.mp3' : '.jpg'));
-    log('⬇ Downloading ' + type + '...');
+    const mediaInfo = getMediaSourceInfo(el);
+    const src = mediaInfo.src;
+    if (!src) { log('⚠️ No source found'); markComplete(); return; }
+    const ext = inferExtension(src, mediaInfo.type, type === 'audio' ? 'mp3' : 'jpg');
+    triggerDownload(src, `${title}.${ext}`);
+    log(`⬇ Downloading ${type} (${ext.toUpperCase()})...`);
+    markComplete();
     return;
   }
 
@@ -209,16 +277,19 @@
     triggerDownload(blobUrl, title + '.txt');
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
     log('📋 Saving text file...');
+    markComplete();
     return;
   }
 
   if (type === 'file-export') {
     const id = getId();
-    if (!id) { log('❌ ID missing'); return; }
+    if (!id) { log('❌ ID missing'); markComplete(); return; }
     triggerDownload(`https://drive.google.com/uc?export=download&id=${id}`, title);
     log('📁 Requesting file download...');
+    markComplete();
     return;
   }
 
   log('⚠️ Auto-detect failed. Refresh and try again.');
+  markComplete();
 })();
