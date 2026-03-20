@@ -339,7 +339,16 @@ downloadBtn.addEventListener('click', async () => {
 
     // ── Step 3: inject downloader and do an immediate log read ───────
     appendLog('🔧 [3/3] Injecting downloader...');
-    await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['downloader.js'] });
+    const injResult = await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['downloader.js'] });
+    appendLog('✓ Injected');
+
+    // Chrome sometimes puts script errors in result.error instead of rejecting
+    const injErr = injResult?.[0]?.error;
+    if (injErr) {
+      appendLog('❌ Script error: ' + (injErr.message || JSON.stringify(injErr)));
+      setBtnState(false);
+      return;
+    }
 
     // Read synchronous log messages immediately (don't wait 500 ms)
     const immResult = await chrome.scripting.executeScript({
