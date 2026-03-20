@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.9] - 2026-03-20
+
+### Fixed
+- **YouTube / CSP-protected pages (root cause)**: `executeScript` with `files:` in `world: 'MAIN'` causes Chrome to create a `<script>` element, which pages with nonce-based CSP (e.g. YouTube) silently block — the injection API reports success but the code never runs. Fix: switch `files:` injections (downloader.js, jsPDF) to `world: 'ISOLATED'`, which bypasses the page's CSP while still sharing the `window` object (so `window.__gdriveUniversalDownloader` remains accessible to both worlds).
+- **Image download hang**: `fetchBlob` cleared the abort timer when response headers arrived, but `.blob()` can take a long time reading a large body. The timer now stays active until the full blob is received. Timeout reduced to 8 s for faster fallback to direct-link.
+
+## [3.0.8] - 2026-03-20
+
+### Changed
+- Added post-injection diagnostic probe (`🔬`) to reveal whether downloader IIFE executes.
+
 ## [3.0.7] - 2026-03-20
 
 ### Fixed

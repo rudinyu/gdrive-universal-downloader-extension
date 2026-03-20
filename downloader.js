@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.0.8 — Injected Logic
+// GDrive Universal Downloader v3.0.9 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -334,11 +334,13 @@
     }
 
     // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
-    const fetchBlob = (src, ms = 15000) => {
+    // Keep the timer running until the body is fully received, not just until headers arrive.
+    const fetchBlob = (src, ms = 8000) => {
       const ctrl  = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), ms);
       return fetch(src, { signal: ctrl.signal })
-        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+        .then(blob => { clearTimeout(timer); return blob; })
         .catch(e => { clearTimeout(timer); throw e; });
     };
 
