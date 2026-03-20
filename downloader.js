@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.0.0 — Injected Logic
+// GDrive Universal Downloader v3.0.1 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -72,7 +72,7 @@
     return { src, type };
   };
 
-  log('🚀 GUD v3.0.0 starting...');
+  log('🚀 GUD v3.0.1 starting...');
 
   // ── Utilities ───────────────────────────────────────────────────
   const getTitle = () => {

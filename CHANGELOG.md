@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-03-20
+
+### Fixed
+- **Universal stuck at "Starting..."**: popup now sets `detectedType` directly in the init script instead of re-injecting `detect.js` at download time. On pages with lazy-loaded images (e.g. Dcard), `naturalWidth` is 0 during re-scan, causing `detect.js` to overwrite the type back to `unknown` and silently skip all download logic.
+- **YouTube direct download**: downloader now reads `ytInitialPlayerResponse.streamingData.formats` to get a direct progressive stream URL (real file download). MediaRecorder is used as a fallback only when no direct URL is available.
+- **Fetch hang on CDN images**: removed `credentials: 'include'` (CDNs returning `Access-Control-Allow-Origin: *` reject credentialed requests); added a 15-second `AbortController` timeout to prevent fetch from blocking indefinitely.
+
 ## [3.0.0] - 2026-03-20
 
 ### Added
