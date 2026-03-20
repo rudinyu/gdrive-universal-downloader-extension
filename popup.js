@@ -202,6 +202,7 @@ async function init() {
         const GUD = window.__gdriveUniversalDownloader || {};
         return {
           type: GUD.detectedType || 'unknown',
+          recording: !!GUD.recording,
           resources: GUD.universalResources
             ? {
                 images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h })),
@@ -213,7 +214,7 @@ async function init() {
       },
     });
 
-    const { type, resources } = results?.[0]?.result || {};
+    const { type, resources, recording } = results?.[0]?.result || {};
     currentType = type || 'unknown';
     const meta = TYPE_META[currentType] || TYPE_META['unknown'];
     typeBadge.textContent = meta.icon + ' ' + meta.label;
@@ -221,6 +222,15 @@ async function init() {
 
     if (meta.pdf)   pdfSettings.classList.add('visible');
     if (meta.video) videoNote.classList.add('visible');
+
+    // If a recording is already in progress (e.g. popup was closed and reopened),
+    // restore the running state and resume polling instead of showing Download.
+    if (recording) {
+      setBtnState(true);
+      stopBtn.style.display = 'flex';
+      startPolling(tab.id);
+      return;
+    }
 
     if (currentType === 'universal' && resources) {
       renderResourcePicker(resources);

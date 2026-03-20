@@ -341,18 +341,12 @@
             triggerDownload(item.src, item.filename);
           }
         } else if (item.type === 'video') {
+          // Direct link — videos are too large to hold in memory as a blob
           const capturedArr = [...capturedVideoURLs];
           const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
           const ext      = inferExtension(matchedUrl, '', 'mp4');
           const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
-          try {
-            const blob    = await fetchBlob(matchedUrl);
-            const blobUrl = URL.createObjectURL(blob);
-            triggerDownload(blobUrl, filename);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-          } catch (fetchErr) {
-            triggerDownload(matchedUrl, filename);
-          }
+          triggerDownload(matchedUrl, filename);
         } else if (item.type === 'pdf') {
           triggerDownload(item.src, item.filename);
         }
