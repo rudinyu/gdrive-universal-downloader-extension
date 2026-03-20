@@ -351,6 +351,21 @@ downloadBtn.addEventListener('click', async () => {
       return;
     }
 
+    // Post-injection probe: did the IIFE actually run?
+    const probeResult = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      world: 'MAIN',
+      func: () => ({
+        marker:  window.__gudRunMarker || null,
+        logLen:  window.__gdriveUniversalDownloader?.log?.length ?? -1,
+        firstMsg: window.__gdriveUniversalDownloader?.log?.[0] ?? '(empty)',
+        type:    window.__gdriveUniversalDownloader?.detectedType ?? '?',
+      }),
+    });
+    const probe = probeResult?.[0]?.result || {};
+    appendLog(`🔬 marker=${probe.marker} logLen=${probe.logLen} type=${probe.type}`);
+    appendLog(`🔬 msg[0]: ${probe.firstMsg}`);
+
     // Read synchronous log messages immediately (don't wait 500 ms)
     const immResult = await chrome.scripting.executeScript({
       target: { tabId: currentTabId },

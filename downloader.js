@@ -1,7 +1,10 @@
-// GDrive Universal Downloader v3.0.7 — Injected Logic
+// GDrive Universal Downloader v3.0.8 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
+  // Marker so popup can verify the IIFE actually executed
+  window.__gudRunMarker = Date.now();
+
   let GUD = window.__gdriveUniversalDownloader;
   if (!GUD) {
     // Namespace missing (page not refreshed after extension update).
