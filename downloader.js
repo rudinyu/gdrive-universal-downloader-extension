@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.1.0 — Injected Logic
+// GDrive Universal Downloader v3.1.1 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -132,24 +132,7 @@
   const processVideo = async () => {
     const title = getTitle();
     if (/youtube\.com\/watch|youtu\.be\//i.test(url)) {
-      log('📺 YouTube detected — trying direct stream URL...');
-
-      // Try ytInitialPlayerResponse first (direct progressive stream, no recording needed)
-      const playerResp = window.ytInitialPlayerResponse;
-      const progressive = [
-        ...(playerResp?.streamingData?.formats || []),
-      ].filter(f => f.url && f.mimeType?.startsWith('video/'));
-
-      if (progressive.length > 0) {
-        progressive.sort((a, b) => (b.width || 0) - (a.width || 0));
-        const best = progressive[0];
-        const ext  = /webm/i.test(best.mimeType) ? 'webm' : 'mp4';
-        triggerDownload(best.url, `${title}.${ext}`);
-        log(`✅ Downloading ${best.width}×${best.height || '?'} ${ext.toUpperCase()}...`);
-        markComplete();
-        return;
-      }
-      log('⚠️ Direct URL unavailable — falling back to MediaRecorder...');
+      log('📺 YouTube detected — using MediaRecorder capture...');
 
       const videoEl = document.querySelector('video');
       if (!videoEl) { log('❌ No video element found.'); markComplete(); return; }
