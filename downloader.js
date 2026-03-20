@@ -117,7 +117,25 @@
   const processVideo = async () => {
     const title = getTitle();
     if (/youtube\.com\/watch|youtu\.be\//i.test(url)) {
-      log('📺 YouTube detected — using MediaRecorder capture...');
+      log('📺 YouTube detected — trying direct stream URL...');
+
+      // Try ytInitialPlayerResponse first (direct progressive stream, no recording needed)
+      const playerResp = window.ytInitialPlayerResponse;
+      const progressive = [
+        ...(playerResp?.streamingData?.formats || []),
+      ].filter(f => f.url && f.mimeType?.startsWith('video/'));
+
+      if (progressive.length > 0) {
+        progressive.sort((a, b) => (b.width || 0) - (a.width || 0));
+        const best = progressive[0];
+        const ext  = /webm/i.test(best.mimeType) ? 'webm' : 'mp4';
+        triggerDownload(best.url, `${title}.${ext}`);
+        log(`✅ Downloading ${best.width}×${best.height || '?'} ${ext.toUpperCase()}...`);
+        markComplete();
+        return;
+      }
+      log('⚠️ Direct URL unavailable — falling back to MediaRecorder...');
+
       const videoEl = document.querySelector('video');
       if (!videoEl) { log('❌ No video element found.'); markComplete(); return; }
       let stream;
@@ -298,34 +316,37 @@
       markComplete();
       return;
     }
+
+    // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
+    const fetchBlob = (src, ms = 15000) => {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      return fetch(src, { signal: ctrl.signal })
+        .then(r => { clearTimeout(timer); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+        .catch(e => { clearTimeout(timer); throw e; });
+    };
+
     log(`⬇ Downloading ${selected.length} item(s)...`);
     let done = 0;
     for (const item of selected) {
       try {
         if (item.type === 'image') {
-          // Try fetch→blob first (forces a real download even for cross-origin images)
           try {
-            const resp = await fetch(item.src, { credentials: 'include' });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const blob    = await resp.blob();
+            const blob    = await fetchBlob(item.src);
             const blobUrl = URL.createObjectURL(blob);
             triggerDownload(blobUrl, item.filename);
             setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
           } catch (fetchErr) {
-            // Fall back to direct link (may open in new tab for cross-origin)
-            log(`⚠️ Fetch failed for ${item.filename}, trying direct link...`);
+            log(`⚠️ Fetch failed (${fetchErr.message}), trying direct link...`);
             triggerDownload(item.src, item.filename);
           }
         } else if (item.type === 'video') {
-          // Try captured XHR URLs first, then direct src
           const capturedArr = [...capturedVideoURLs];
           const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
-          const ext = inferExtension(matchedUrl, '', 'mp4');
+          const ext      = inferExtension(matchedUrl, '', 'mp4');
           const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
           try {
-            const resp = await fetch(matchedUrl, { credentials: 'include' });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const blob    = await resp.blob();
+            const blob    = await fetchBlob(matchedUrl);
             const blobUrl = URL.createObjectURL(blob);
             triggerDownload(blobUrl, filename);
             setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
@@ -337,7 +358,7 @@
         }
         log(`✅ ${item.filename}`);
         done++;
-        await sleep(400); // small gap between downloads
+        await sleep(400);
       } catch (err) {
         log(`❌ ${item.filename}: ${err.message}`);
       }

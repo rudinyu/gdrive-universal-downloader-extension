@@ -275,22 +275,23 @@ downloadBtn.addEventListener('click', async () => {
       }
     }
 
-    // 1. Initialize namespace and settings
+    // 1. Initialize namespace — set detectedType directly so detect.js re-injection
+    //    cannot clobber it (e.g. lazy-loaded images have naturalWidth=0 on re-scan).
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
-      func: (s, sel) => {
+      func: (s, sel, type) => {
         window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || { capturedVideoURLs: new Set() };
-        window.__gdriveUniversalDownloader.settings         = s;
-        window.__gdriveUniversalDownloader.log              = [];
-        window.__gdriveUniversalDownloader.runComplete      = false;
+        window.__gdriveUniversalDownloader.settings          = s;
+        window.__gdriveUniversalDownloader.log               = [];
+        window.__gdriveUniversalDownloader.runComplete       = false;
         window.__gdriveUniversalDownloader.selectedResources = sel;
+        window.__gdriveUniversalDownloader.detectedType      = type;
       },
-      args: [settings, selectedResources],
+      args: [settings, selectedResources, currentType],
     });
 
-    // 2. Re-run detection and inject dependencies
-    await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['detect.js'] });
+    // 2. Inject dependencies (no detect.js re-injection — type already set above)
     if (currentType === 'blob-pdf') {
       await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
     }
