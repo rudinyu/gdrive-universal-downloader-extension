@@ -247,10 +247,21 @@ const renderYoutubeFormatPicker = (formats) => {
     if (isFirst) select();
   };
 
+  let firstAdaptiveSeen = false;
   formats.forEach((f, i) => {
-    const ext     = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
-    const size    = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
-    const badge   = f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
+    // Insert separator before first video-only entry
+    if (f.videoOnly && !firstAdaptiveSeen) {
+      firstAdaptiveSeen = true;
+      const sep = document.createElement('div');
+      sep.className   = 'resource-section-header';
+      sep.textContent = 'Video only (no audio)';
+      youtubeFormatList.appendChild(sep);
+    }
+    const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
+    const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
+    const badge = f.height >= 1080
+      ? ` <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">HD</span>`
+      : f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
     addItem('🎬', f.qualityLabel + badge, `${ext}  ${size}`, f, i === 0);
   });
 
@@ -282,18 +293,29 @@ async function init() {
         const GUD = window.__gdriveUniversalDownloader || {};
         let youtubeFormats = null;
         if (/youtube\.com\/watch|youtu\.be\//i.test(location.href)) {
-          const fmts = window.ytInitialPlayerResponse?.streamingData?.formats || [];
-          const mapped = fmts
+          const sd  = window.ytInitialPlayerResponse?.streamingData || {};
+          const toEntry = (f, videoOnly) => ({
+            url:          f.url,
+            qualityLabel: f.qualityLabel || '?',
+            height:       f.height || 0,
+            mimeType:     (f.mimeType || '').split(';')[0],
+            sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
+            videoOnly:    !!videoOnly,
+          });
+          // Muxed streams (video+audio, up to ~720p)
+          const muxed = (sd.formats || [])
             .filter(f => f.url && f.mimeType?.startsWith('video/'))
-            .map(f => ({
-              url:          f.url,
-              qualityLabel: f.qualityLabel || '?',
-              height:       f.height || 0,
-              mimeType:     (f.mimeType || '').split(';')[0],
-              sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
-            }))
+            .map(f => toEntry(f, false))
             .sort((a, b) => b.height - a.height);
-          if (mapped.length > 0) youtubeFormats = mapped;
+          // Adaptive video-only streams (1080p+), deduplicated by qualityLabel
+          const seen = new Set();
+          const adaptive = (sd.adaptiveFormats || [])
+            .filter(f => f.url && f.mimeType?.startsWith('video/') && f.height >= 1080)
+            .map(f => toEntry(f, true))
+            .sort((a, b) => b.height - a.height)
+            .filter(f => { if (seen.has(f.qualityLabel)) return false; seen.add(f.qualityLabel); return true; });
+          const all = [...muxed, ...adaptive];
+          if (all.length > 0) youtubeFormats = all;
         }
         return {
           type: GUD.detectedType || 'unknown',

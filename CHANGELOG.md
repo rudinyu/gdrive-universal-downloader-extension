@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2026-03-20
+
+### Added
+- **1080p+ video-only download**: reads `streamingData.adaptiveFormats` for ≥1080p video tracks (deduplicated by quality label) and shows them under a "Video only (no audio)" separator in the quality picker. Downloaded directly via `chrome.downloads.download`.
+
 ## [3.2.0] - 2026-03-20
 
 ### Added
