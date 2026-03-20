@@ -20,6 +20,9 @@ const TYPE_META = {
 const typeBadge      = document.getElementById('typeBadge');
 const pdfSettings    = document.getElementById('pdfSettings');
 const videoNote      = document.getElementById('videoNote');
+const youtubeFormatPicker = document.getElementById('youtubeFormatPicker');
+const youtubeFormatList   = document.getElementById('youtubeFormatList');
+const youtubeFormatLabel  = document.getElementById('youtubeFormatLabel');
 const resourcePicker = document.getElementById('resourcePicker');
 const resourceList   = document.getElementById('resourceList');
 const resourceCount  = document.getElementById('resourceCount');
@@ -37,9 +40,10 @@ const qualityVal     = document.getElementById('qualityVal');
 const mainContent        = document.getElementById('mainContent');
 const unsupportedContent = document.getElementById('unsupportedContent');
 
-let currentTabId = null;
-let currentType  = 'unknown';
-let pollInterval = null;
+let currentTabId          = null;
+let currentType           = 'unknown';
+let pollInterval          = null;
+let selectedYoutubeFormat = null; // { url, qualityLabel, mimeType } | { mediarecorder: true }
 
 // ── Helpers ──────────────────────────────────────────────────────
 const LOG_LEVELS = [
@@ -193,6 +197,68 @@ const renderResourcePicker = (resources) => {
   updateResourceCount();
 };
 
+// ── YouTube quality picker ───────────────────────────────────────
+const renderYoutubeFormatPicker = (formats) => {
+  youtubeFormatPicker.style.display = 'block';
+  videoNote.classList.remove('visible'); // replaced by picker
+  youtubeFormatList.innerHTML = '';
+  selectedYoutubeFormat = null;
+
+  const addItem = (icon, label, sublabel, value, isFirst) => {
+    const div = document.createElement('div');
+    div.className = 'resource-item';
+
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'ytfmt';
+    radio.checked = isFirst;
+
+    const iconEl = document.createElement('span');
+    iconEl.className   = 'ri-icon';
+    iconEl.textContent = icon;
+
+    const info = document.createElement('div');
+    info.className = 'ri-info';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'ri-name';
+    nameEl.innerHTML = label;
+
+    const metaEl = document.createElement('div');
+    metaEl.className   = 'ri-meta';
+    metaEl.textContent = sublabel;
+
+    info.appendChild(nameEl);
+    info.appendChild(metaEl);
+    div.appendChild(radio);
+    div.appendChild(iconEl);
+    div.appendChild(info);
+    youtubeFormatList.appendChild(div);
+
+    const select = () => {
+      radio.checked = true;
+      selectedYoutubeFormat = value;
+      downloadBtn.disabled = false;
+      youtubeFormatLabel.textContent = typeof value === 'object' && value.qualityLabel
+        ? value.qualityLabel + ' selected'
+        : 'MediaRecorder selected';
+    };
+    div.addEventListener('click', select);
+    if (isFirst) select();
+  };
+
+  formats.forEach((f, i) => {
+    const ext     = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
+    const size    = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
+    const badge   = f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
+    addItem('🎬', f.qualityLabel + badge, `${ext}  ${size}`, f, i === 0);
+  });
+
+  // MediaRecorder option (1080p+)
+  addItem('🎥', 'Record live <span class="format-badge" style="background:#2a1a3a;color:#ce93d8">1080p+</span>',
+    'MediaRecorder · keep tab open', { mediarecorder: true }, formats.length === 0);
+};
+
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -214,9 +280,25 @@ async function init() {
       world: 'MAIN',
       func: () => {
         const GUD = window.__gdriveUniversalDownloader || {};
+        let youtubeFormats = null;
+        if (/youtube\.com\/watch|youtu\.be\//i.test(location.href)) {
+          const fmts = window.ytInitialPlayerResponse?.streamingData?.formats || [];
+          const mapped = fmts
+            .filter(f => f.url && f.mimeType?.startsWith('video/'))
+            .map(f => ({
+              url:          f.url,
+              qualityLabel: f.qualityLabel || '?',
+              height:       f.height || 0,
+              mimeType:     (f.mimeType || '').split(';')[0],
+              sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
+            }))
+            .sort((a, b) => b.height - a.height);
+          if (mapped.length > 0) youtubeFormats = mapped;
+        }
         return {
           type: GUD.detectedType || 'unknown',
           recording: !!GUD.recording,
+          youtubeFormats,
           resources: GUD.universalResources
             ? {
                 images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h })),
@@ -228,14 +310,14 @@ async function init() {
       },
     });
 
-    const { type, resources, recording } = results?.[0]?.result || {};
+    const { type, resources, recording, youtubeFormats } = results?.[0]?.result || {};
     currentType = type || 'unknown';
     const meta = TYPE_META[currentType] || TYPE_META['unknown'];
     typeBadge.textContent = meta.icon + ' ' + meta.label;
     typeBadge.className   = 'type-badge ' + currentType;
 
     if (meta.pdf)   pdfSettings.classList.add('visible');
-    if (meta.video) videoNote.classList.add('visible');
+    if (meta.video) videoNote.classList.add('visible'); // may be hidden by format picker below
 
     // If a recording is already in progress (e.g. popup was closed and reopened),
     // restore the running state and resume polling instead of showing Download.
@@ -246,7 +328,9 @@ async function init() {
       return;
     }
 
-    if (currentType === 'universal' && resources) {
+    if (currentType === 'video' && youtubeFormats?.length > 0) {
+      renderYoutubeFormatPicker(youtubeFormats);
+    } else if (currentType === 'universal' && resources) {
       renderResourcePicker(resources);
       // download button enabled/disabled controlled by updateResourceCount()
     } else if (currentType !== 'unknown') {
@@ -272,6 +356,30 @@ selectNoneBtn.addEventListener('click', () => {
 
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
+
+  // ── YouTube direct download (muxed formats ≤720p) ────────────────
+  if (currentType === 'video' && selectedYoutubeFormat && !selectedYoutubeFormat.mediarecorder) {
+    setBtnState(true);
+    logBox.innerHTML = '';
+    try {
+      const titleResult = await chrome.scripting.executeScript({
+        target: { tabId: currentTabId }, world: 'MAIN',
+        func: () => document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim() || 'video',
+      });
+      const safeTitle = (titleResult?.[0]?.result || 'video')
+        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 180) || 'video';
+      const ext      = selectedYoutubeFormat.mimeType === 'video/webm' ? 'webm' : 'mp4';
+      const filename = safeTitle + '.' + ext;
+      appendLog(`⬇ Downloading ${selectedYoutubeFormat.qualityLabel} ${ext.toUpperCase()}...`);
+      await chrome.downloads.download({ url: selectedYoutubeFormat.url, filename });
+      appendLog('✅ Check your downloads folder.');
+    } catch (err) {
+      appendLog('❌ ' + (err?.message || String(err)));
+    }
+    setBtnState(false);
+    return;
+  }
+
   const settings = { scale: parseFloat(scaleSlider.value), quality: parseFloat(qualitySlider.value), scrollDelay: 200 };
   setBtnState(true);
   logBox.innerHTML = '';

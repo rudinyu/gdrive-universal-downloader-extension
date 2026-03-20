@@ -275,6 +275,15 @@
     }
     .resource-item .ri-meta { font-size: 9.5px; color: #5060a0; }
 
+    /* YouTube format picker */
+    .yt-format-note { font-size: 10px; color: #5060a0; padding: 0 8px 4px; }
+    .resource-item input[type="radio"] { flex-shrink: 0; accent-color: #5272e0; cursor: pointer; }
+    .format-badge {
+      font-size: 9px; font-weight: 700; padding: 1px 5px;
+      border-radius: 3px; background: #1a3a5a; color: #64b5f6;
+      margin-left: 4px; vertical-align: middle;
+    }
+
     /* Unsupported page */
     .unsupported {
       padding: 20px 16px;
@@ -292,7 +301,7 @@
     <div class="header-icon">📥</div>
     <div class="header-text">
       <h1>GDrive Universal Downloader</h1>
-      <p>v3.1.1 · Auto-detect &amp; download</p>
+      <p>v3.2.0 · Auto-detect &amp; download</p>
     </div>
   </div>
 
@@ -315,6 +324,14 @@
         <input type="range" id="qualitySlider" min="0.5" max="1.0" step="0.01" value="0.82">
         <span class="setting-val" id="qualityVal">0.82</span>
       </div>
+    </div>
+
+    <!-- YouTube quality picker (shown for 'video' type on YouTube) -->
+    <div class="resource-picker" id="youtubeFormatPicker" style="display:none">
+      <div class="resource-controls">
+        <span class="resource-count" id="youtubeFormatLabel">Select quality</span>
+      </div>
+      <div class="resource-list" id="youtubeFormatList"></div>
     </div>
 
     <!-- Universal resource picker (shown for 'universal' type) -->
