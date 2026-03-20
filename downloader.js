@@ -1,60 +1,66 @@
-// GDrive Universal Downloader v3.1.1 — Injected Logic
+// GDrive Universal Downloader v3.4.0 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
   // Marker so popup can verify the IIFE actually executed
   window.__gudRunMarker = Date.now();
 
+  const VERSION = '3.4.0';
+  const CONFIG = {
+    DEFAULT_SCALE: 1.0,
+    DEFAULT_QUALITY: 0.82,
+    DEFAULT_SCROLL_DELAY: 200,
+    REVOKE_DELAY: 60000,
+    MAX_DOWNLOADS: 50,
+    VIDEO_PATTERNS: [/googlevideo\.com/, /\.m3u8/, /\.mpd/, /videoplayback/, /mime=video/, /itag=\d+/],
+    YOUTUBE_PATTERN: /youtube\.com\/watch|youtu\.be\//i,
+    GDRIVE_PATTERN: /drive\.google\.com/i,
+    MIME_EXT_MAP: {
+      'video/mp4': 'mp4',
+      'video/webm': 'webm',
+      'video/quicktime': 'mov',
+      'video/x-matroska': 'mkv',
+      'audio/mpeg': 'mp3',
+      'audio/mp3': 'mp3',
+      'audio/wav': 'wav',
+      'audio/ogg': 'ogg',
+      'audio/webm': 'webm',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+    }
+  };
+
   let GUD = window.__gdriveUniversalDownloader;
   if (!GUD) {
-    // Namespace missing (page not refreshed after extension update).
-    // Create a minimal object so the error is visible in the popup log.
     window.__gdriveUniversalDownloader = { log: ['❌ Reload the page and try again (extension was updated).'], runComplete: true };
-    console.warn('[GUD] Namespace missing — reload the page.');
+    console.warn(`[GUD] v${VERSION} Namespace missing — reload the page.`);
     return;
   }
-  const cfg = GUD.settings || {};
-  const SCALE        = cfg.scale       ?? 1.0;
-  const QUALITY      = cfg.quality     ?? 0.82;
-  const SCROLL_DELAY = cfg.scrollDelay ?? 200;
 
-  // Always write through the live window reference so that even if the
-  // page reassigns window.__gdriveUniversalDownloader between executeScript
-  // calls, the popup polling still sees the messages.
+  const cfg = GUD.settings || {};
+  const SCALE        = cfg.scale       ?? CONFIG.DEFAULT_SCALE;
+  const QUALITY      = cfg.quality     ?? CONFIG.DEFAULT_QUALITY;
+  const SCROLL_DELAY = cfg.scrollDelay ?? CONFIG.DEFAULT_SCROLL_DELAY;
+  const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
+
   const log = (msg) => {
     const g = window.__gdriveUniversalDownloader || GUD;
     g.log = g.log || [];
     g.log.push(msg);
   };
 
-  const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
-  GUD.runComplete = false;
   const markComplete = () => {
     (window.__gdriveUniversalDownloader || GUD).runComplete = true;
   };
 
-  const MIME_EXTENSION_MAP = {
-    'video/mp4': 'mp4',
-    'video/webm': 'webm',
-    'video/quicktime': 'mov',
-    'video/x-matroska': 'mkv',
-    'audio/mpeg': 'mp3',
-    'audio/mp3': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/webm': 'webm',
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
-  };
+  log(`🚀 GUD v${VERSION} starting...`);
 
-  const normalizeExt = (ext, fallback = 'bin') => {
-    const val = (ext || '').replace(/^\./, '').toLowerCase();
-    return val || fallback;
-  };
-
-  const getExtensionFromMime = (mime = '') => MIME_EXTENSION_MAP[mime.toLowerCase()] || null;
+  // ── Utilities ───────────────────────────────────────────────────
+  const normalizeExt = (ext, fallback = 'bin') => (ext || '').replace(/^\./, '').toLowerCase() || fallback;
+  const getExtensionFromMime = (mime = '') => CONFIG.MIME_EXT_MAP[mime.toLowerCase()] || null;
+  const isVideoURL = u => CONFIG.VIDEO_PATTERNS.some(p => p.test(u));
 
   const getExtensionFromURL = (url = '') => {
     if (!url) return null;
@@ -86,9 +92,6 @@
     return { src, type };
   };
 
-  log('🚀 GUD v3.0.5 starting...');
-
-  // ── Utilities ───────────────────────────────────────────────────
   const getTitle = () => {
     const meta = document.querySelector('meta[itemprop="name"]')?.content;
     const raw  = meta || document.title;
@@ -130,7 +133,7 @@
   // ── Strategy: Video ─────────────────────────────────────────────
   const processVideo = async () => {
     const title = getTitle();
-    if (/youtube\.com\/watch|youtu\.be\//i.test(url)) {
+    if (CONFIG.YOUTUBE_PATTERN.test(url)) {
       log('📺 YouTube detected — using MediaRecorder capture...');
 
       const videoEl = document.querySelector('video');
@@ -152,7 +155,7 @@
           const blob    = new Blob(chunks, { type: 'video/webm' });
           const blobUrl = URL.createObjectURL(blob);
           triggerDownload(blobUrl, title + '.webm');
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
           log('✅ Recording saved: ' + title + '.webm');
           markComplete();
         }, 300);
@@ -172,7 +175,6 @@
       return;
     }
 
-    const isVideoURL = u => [/googlevideo\.com/, /\.m3u8/, /\.mpd/, /videoplayback/, /mime=video/, /itag=\d+/].some(p => p.test(u));
     const videoEl = document.querySelector('video');
     const videoInfo = getMediaSourceInfo(videoEl);
     const domSrc  = videoInfo.src;
@@ -291,7 +293,7 @@
     const blob    = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const blobUrl = URL.createObjectURL(blob);
     triggerDownload(blobUrl, title + '.txt');
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
     log('📋 Saving text file...');
     markComplete();
     return;
@@ -326,9 +328,8 @@
         .catch(e => { clearTimeout(timer); throw e; });
     };
 
-    const MAX_DOWNLOADS = 50;
-    if (selected.length > MAX_DOWNLOADS) {
-      log(`❌ Too many items selected (max ${MAX_DOWNLOADS}). Deselect some and retry.`);
+    if (selected.length > CONFIG.MAX_DOWNLOADS) {
+      log(`❌ Too many items selected (max ${CONFIG.MAX_DOWNLOADS}). Deselect some and retry.`);
       markComplete();
       return;
     }
@@ -349,7 +350,7 @@
               const blob    = await fetchBlob(item.src);
               const blobUrl = URL.createObjectURL(blob);
               triggerDownload(blobUrl, item.filename);
-              setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
             } catch (fetchErr) {
               log(`⚠️ Fetch failed (${fetchErr.message}), trying direct link...`);
               triggerDownload(item.src, item.filename);

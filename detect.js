@@ -4,31 +4,44 @@
 (function () {
   const url = location.href;
 
+  const SELECTORS = {
+    BLOB_PDF: 'img[src^="blob:https://drive.google.com/"]',
+    GDOC: /docs\.google\.com\/document/i,
+    GSHEET: /docs\.google\.com\/spreadsheets/i,
+    GSLIDES: /docs\.google\.com\/presentation/i,
+    GFORMS: /docs\.google\.com\/forms/i,
+    GDRAWINGS: /docs\.google\.com\/drawings/i,
+    YOUTUBE: /youtube\.com\/watch|youtu\.be\//i,
+    GDRIVE_VIDEO: 'video',
+    GDRIVE_AUDIO: 'audio',
+    GDRIVE_IMAGE: 'img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img',
+    GDRIVE_TEXT: '.drive-viewer-text-container, .docs-texteventtarget-iframe',
+    GDRIVE_FILE: /drive\.google\.com\/file\/d\//i
+  };
+
   window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || {
     capturedVideoURLs: new Set(),
     hooksInstalled: false,
   };
   const GUD = window.__gdriveUniversalDownloader;
 
-  const blobImgs = [...document.getElementsByTagName('img')]
-    .filter(img => img.src.startsWith('blob:https://drive.google.com/'));
+  const blobImgs = [...document.querySelectorAll(SELECTORS.BLOB_PDF)];
 
   let type = 'unknown';
-  if (blobImgs.length > 0)                                    type = 'blob-pdf';
-  else if (/docs\.google\.com\/document/i.test(url))          type = 'gdoc';
-  else if (/docs\.google\.com\/spreadsheets/i.test(url))      type = 'gsheet';
-  else if (/docs\.google\.com\/presentation/i.test(url))      type = 'gslides';
-  else if (/docs\.google\.com\/forms/i.test(url))             type = 'gforms';
-  else if (/docs\.google\.com\/drawings/i.test(url))          type = 'gdrawings';
-  else if (/youtube\.com\/watch|youtu\.be\//i.test(url))      type = 'video';
-  // GDrive-only media/text viewers
-  else if (/drive\.google\.com/i.test(url) && document.querySelector('video'))   type = 'video';
-  else if (/drive\.google\.com/i.test(url) && document.querySelector('audio'))   type = 'audio';
-  else if (document.querySelector('img.stretch-fit, #drive-viewer-main-content img, .drive-viewer-content img'))
-                                                               type = 'image';
-  else if (document.querySelector('.drive-viewer-text-container, .docs-texteventtarget-iframe'))
-                                                               type = 'text';
-  else if (/drive\.google\.com\/file\/d\//i.test(url))        type = 'file-export';
+  if (blobImgs.length > 0)                          type = 'blob-pdf';
+  else if (SELECTORS.GDOC.test(url))                type = 'gdoc';
+  else if (SELECTORS.GSHEET.test(url))              type = 'gsheet';
+  else if (SELECTORS.GSLIDES.test(url))             type = 'gslides';
+  else if (SELECTORS.GFORMS.test(url))              type = 'gforms';
+  else if (SELECTORS.GDRAWINGS.test(url))           type = 'gdrawings';
+  else if (SELECTORS.YOUTUBE.test(url))             type = 'video';
+  else if (/drive\.google\.com/i.test(url)) {
+    if (document.querySelector(SELECTORS.GDRIVE_VIDEO))      type = 'video';
+    else if (document.querySelector(SELECTORS.GDRIVE_AUDIO)) type = 'audio';
+    else if (document.querySelector(SELECTORS.GDRIVE_IMAGE)) type = 'image';
+    else if (document.querySelector(SELECTORS.GDRIVE_TEXT))  type = 'text';
+    else if (SELECTORS.GDRIVE_FILE.test(url))                type = 'file-export';
+  }
 
   // ── Universal detection for all other pages ──────────────────────
   if (type === 'unknown') {
@@ -38,11 +51,9 @@
         const h = img.naturalHeight || img.height;
         return w >= 100 && h >= 100 && img.src &&
           !img.src.startsWith('data:image/svg') &&
-          !img.src.startsWith('data:image/gif;base64,R0lGODlh'); // 1x1 tracking pixels
+          !img.src.startsWith('data:image/gif;base64,R0lGODlh');
       })
-      .sort((a, b) =>
-        (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight)
-      )
+      .sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight))
       .slice(0, 30)
       .map(img => ({
         type: 'image',
@@ -77,7 +88,6 @@
       pdfEmbeds.unshift({ type: 'pdf', src: url });
     }
 
-    // Deduplicate PDFs by src
     const pdfs = [...new Map(pdfEmbeds.map(p => [p.src, p])).values()];
 
     if (images.length > 0 || videos.length > 0 || pdfs.length > 0) {

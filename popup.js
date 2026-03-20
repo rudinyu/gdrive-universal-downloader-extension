@@ -358,6 +358,7 @@ async function init() {
         return {
           type: GUD.detectedType || 'unknown',
           recording: !!GUD.recording,
+          log: GUD.log || [],
           youtubeFormats,
           resources: GUD.universalResources
             ? {
@@ -370,8 +371,17 @@ async function init() {
       },
     });
 
-    const { type, resources, recording, youtubeFormats } = results?.[0]?.result || {};
+    if (!results || !results[0]) {
+      throw new Error('Could not retrieve detection results');
+    }
+
+    const { type, resources, recording, log, youtubeFormats } = results[0].result || {};
     currentType = type || 'unknown';
+    
+    // Restore log if any
+    if (log && log.length > 0) {
+      log.forEach(appendLog);
+    }
     const meta = TYPE_META[currentType] || TYPE_META['unknown'];
     typeBadge.textContent = meta.icon + ' ' + meta.label;
     typeBadge.className   = 'type-badge ' + currentType;
