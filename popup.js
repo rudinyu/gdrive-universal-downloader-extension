@@ -299,17 +299,16 @@ downloadBtn.addEventListener('click', async () => {
       }
     }
 
-    // 1. Rebuild GUD as a brand-new object so downloader.js and polling
-    //    always share the same reference (avoids stale-reference log blackout).
+    // ── Step 1: set up GUD namespace ────────────────────────────────
+    appendLog('🔧 [1/3] Initializing namespace...');
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
       func: (s, sel, type) => {
-        const prev    = window.__gdriveUniversalDownloader;
-        const prevSet = prev?.capturedVideoURLs instanceof Set ? prev.capturedVideoURLs : new Set();
+        const prev = window.__gdriveUniversalDownloader || {};
         window.__gdriveUniversalDownloader = {
-          hooksInstalled:    !!(prev?.hooksInstalled),
-          capturedVideoURLs: prevSet,
+          hooksInstalled:    !!prev.hooksInstalled,
+          capturedVideoURLs: prev.capturedVideoURLs || new Set(),
           log:               [],
           recording:         false,
           runComplete:       false,
@@ -321,17 +320,48 @@ downloadBtn.addEventListener('click', async () => {
       args: [settings, selectedResources, currentType],
     });
 
-    // 2. Inject dependencies (no detect.js re-injection — type already set above)
+    // Verify GUD was created correctly
+    const diagResult = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      world: 'MAIN',
+      func: () => {
+        const g = window.__gdriveUniversalDownloader;
+        return g ? `type="${g.detectedType}" sel=${JSON.stringify(g.selectedResources?.length ?? null)}` : 'GUD MISSING';
+      },
+    });
+    appendLog('🔍 GUD: ' + (diagResult?.[0]?.result ?? 'no result'));
+
+    // ── Step 2: inject libraries ─────────────────────────────────────
     if (currentType === 'blob-pdf') {
+      appendLog('🔧 [2/3] Loading jsPDF...');
       await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
     }
 
-    // 3. Inject downloader
+    // ── Step 3: inject downloader and do an immediate log read ───────
+    appendLog('🔧 [3/3] Injecting downloader...');
     await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['downloader.js'] });
+
+    // Read synchronous log messages immediately (don't wait 500 ms)
+    const immResult = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      world: 'MAIN',
+      func: () => {
+        const g = window.__gdriveUniversalDownloader || {};
+        const msgs = g.log || [];
+        g.log = [];
+        return { msgs, recording: !!g.recording, runComplete: !!g.runComplete };
+      },
+    });
+    const { msgs: immMsgs = [], recording: immRec = false, runComplete: immDone = false }
+      = immResult?.[0]?.result || {};
+    immMsgs.forEach(appendLog);
+    stopBtn.style.display = immRec ? 'flex' : 'none';
+    if (immDone) { setBtnState(false); return; }
+
     startPolling(currentTabId);
 
   } catch (err) {
-    appendLog('❌ Failed: ' + err.message);
+    appendLog('❌ Error: ' + (err?.message || String(err)));
     setBtnState(false);
   }
 });
