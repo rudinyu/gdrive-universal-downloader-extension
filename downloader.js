@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.0.9 — Injected Logic
+// GDrive Universal Downloader v3.1.0 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -345,38 +345,41 @@
     };
 
     log(`⬇ Downloading ${selected.length} item(s)...`);
-    let done = 0;
-    for (const item of selected) {
-      try {
-        if (item.type === 'image') {
-          try {
-            const blob    = await fetchBlob(item.src);
-            const blobUrl = URL.createObjectURL(blob);
-            triggerDownload(blobUrl, item.filename);
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-          } catch (fetchErr) {
-            log(`⚠️ Fetch failed (${fetchErr.message}), trying direct link...`);
+    // Wrap in async IIFE — await is not valid in the non-async outer IIFE
+    (async () => {
+      let done = 0;
+      for (const item of selected) {
+        try {
+          if (item.type === 'image') {
+            try {
+              const blob    = await fetchBlob(item.src);
+              const blobUrl = URL.createObjectURL(blob);
+              triggerDownload(blobUrl, item.filename);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+            } catch (fetchErr) {
+              log(`⚠️ Fetch failed (${fetchErr.message}), trying direct link...`);
+              triggerDownload(item.src, item.filename);
+            }
+          } else if (item.type === 'video') {
+            // Direct link — videos are too large to hold in memory as a blob
+            const capturedArr = [...capturedVideoURLs];
+            const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
+            const ext      = inferExtension(matchedUrl, '', 'mp4');
+            const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
+            triggerDownload(matchedUrl, filename);
+          } else if (item.type === 'pdf') {
             triggerDownload(item.src, item.filename);
           }
-        } else if (item.type === 'video') {
-          // Direct link — videos are too large to hold in memory as a blob
-          const capturedArr = [...capturedVideoURLs];
-          const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
-          const ext      = inferExtension(matchedUrl, '', 'mp4');
-          const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
-          triggerDownload(matchedUrl, filename);
-        } else if (item.type === 'pdf') {
-          triggerDownload(item.src, item.filename);
+          log(`✅ ${item.filename}`);
+          done++;
+          await sleep(400);
+        } catch (err) {
+          log(`❌ ${item.filename}: ${err.message}`);
         }
-        log(`✅ ${item.filename}`);
-        done++;
-        await sleep(400);
-      } catch (err) {
-        log(`❌ ${item.filename}: ${err.message}`);
       }
-    }
-    log(`🎉 Done! ${done}/${selected.length} downloaded.`);
-    markComplete();
+      log(`🎉 Done! ${done}/${selected.length} downloaded.`);
+      markComplete();
+    })();
     return;
   }
 

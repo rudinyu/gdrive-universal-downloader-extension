@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-03-20
+
+### Fixed
+- **Root cause of all v3.0 failures**: the `universal` strategy used `await fetchBlob()` and `await sleep()` directly inside the non-async outer IIFE. This is a JavaScript syntax error — V8 rejects the entire file at parse time, so the IIFE never starts. That explains `marker=null`, empty logs, and the 90 s timeout on every page type including YouTube and Dcard. Fix: wrap the async download loop in an inner `(async () => { ... })()` IIFE.
+- Reverted `world: 'ISOLATED'` back to `world: 'MAIN'` for file injections (CSP was not the issue; v2.5.3 used `MAIN` and worked fine).
+
 ## [3.0.9] - 2026-03-20
 
 ### Fixed

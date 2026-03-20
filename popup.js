@@ -333,18 +333,14 @@ downloadBtn.addEventListener('click', async () => {
     appendLog('🔍 GUD: ' + (diagResult?.[0]?.result ?? 'no result'));
 
     // ── Step 2: inject libraries ─────────────────────────────────────
-    // Use ISOLATED world for file injections: Chrome creates a <script> element
-    // for files: in MAIN world, which YouTube's nonce CSP silently blocks.
-    // ISOLATED world content scripts bypass page CSP while still sharing the
-    // window object (window.__gdriveUniversalDownloader) with MAIN world.
     if (currentType === 'blob-pdf') {
       appendLog('🔧 [2/3] Loading jsPDF...');
-      await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'ISOLATED', files: ['lib/jspdf.umd.min.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
     }
 
     // ── Step 3: inject downloader and do an immediate log read ───────
     appendLog('🔧 [3/3] Injecting downloader...');
-    const injResult = await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'ISOLATED', files: ['downloader.js'] });
+    const injResult = await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['downloader.js'] });
     appendLog('✓ Injected');
 
     // Chrome sometimes puts script errors in result.error instead of rejecting
