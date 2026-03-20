@@ -293,7 +293,9 @@ async function init() {
         const GUD = window.__gdriveUniversalDownloader || {};
         let youtubeFormats = null;
         if (/youtube\.com\/watch|youtu\.be\//i.test(location.href)) {
-          const sd  = window.ytInitialPlayerResponse?.streamingData || {};
+          const sd = window.ytInitialPlayerResponse?.streamingData || {};
+          // A format has audio if its mimeType codec list includes an audio codec
+          const hasAudio = f => /mp4a|opus|vorbis/i.test(f.mimeType || '');
           const toEntry = (f, videoOnly) => ({
             url:          f.url,
             qualityLabel: f.qualityLabel || '?',
@@ -302,15 +304,15 @@ async function init() {
             sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
             videoOnly:    !!videoOnly,
           });
-          // Muxed streams (video+audio, up to ~720p)
-          const muxed = (sd.formats || [])
-            .filter(f => f.url && f.mimeType?.startsWith('video/'))
+          // Muxed streams — only entries confirmed to carry audio
+          const muxed = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
+            .filter(f => f.url && f.mimeType?.startsWith('video/') && hasAudio(f))
             .map(f => toEntry(f, false))
             .sort((a, b) => b.height - a.height);
-          // Adaptive video-only streams (1080p+), deduplicated by qualityLabel
+          // Video-only streams — all resolutions, deduped by qualityLabel
           const seen = new Set();
-          const adaptive = (sd.adaptiveFormats || [])
-            .filter(f => f.url && f.mimeType?.startsWith('video/') && f.height >= 1080)
+          const adaptive = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
+            .filter(f => f.url && f.mimeType?.startsWith('video/') && !hasAudio(f))
             .map(f => toEntry(f, true))
             .sort((a, b) => b.height - a.height)
             .filter(f => { if (seen.has(f.qualityLabel)) return false; seen.add(f.qualityLabel); return true; });

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.2] - 2026-03-20
+
+### Fixed
+- **720p no audio**: YouTube has been phasing out muxed 720p streams. Muxed vs video-only classification is now based on whether the mimeType codec string contains an audio codec (`mp4a`/`opus`/`vorbis`), not on which stream array the format came from. Video-only formats at any resolution are shown under the "Video only (no audio)" separator.
+
 ## [3.2.1] - 2026-03-20
 
 ### Added
