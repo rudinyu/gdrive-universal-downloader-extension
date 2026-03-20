@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.0.5 — Injected Logic
+// GDrive Universal Downloader v3.0.6 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {

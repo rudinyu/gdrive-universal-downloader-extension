@@ -5,10 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.6] - 2026-03-20
+
+### Fixed
+- **Log blackout / YouTube stuck after injection**: the init script was replacing `window.__gdriveUniversalDownloader` with a new object, meaning downloader.js would capture a stale reference and push logs to an object that polling was no longer reading. Fix: init script now mutates the existing object (only creates a new one if it doesn't already exist), so downloader.js and polling always share the same reference.
+
 ## [3.0.5] - 2026-03-20
 
 ### Changed
-- (describe changes here)
+- Added step-by-step diagnostic logs (`[1/3]`, `[3/3]`, GUD diag, `✓ Injected`, `result.error` check) to surface injection failures.
 
 ## [3.0.4] - 2026-03-20
 

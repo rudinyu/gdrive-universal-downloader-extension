@@ -300,22 +300,23 @@ downloadBtn.addEventListener('click', async () => {
     }
 
     // ── Step 1: set up GUD namespace ────────────────────────────────
+    // Mutate the existing object (do NOT replace it) so downloader.js
+    // and polling always reference the same window.__gdriveUniversalDownloader.
     appendLog('🔧 [1/3] Initializing namespace...');
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
       func: (s, sel, type) => {
-        const prev = window.__gdriveUniversalDownloader || {};
-        window.__gdriveUniversalDownloader = {
-          hooksInstalled:    !!prev.hooksInstalled,
-          capturedVideoURLs: prev.capturedVideoURLs || new Set(),
-          log:               [],
-          recording:         false,
-          runComplete:       false,
-          settings:          s,
-          selectedResources: sel,
-          detectedType:      type,
-        };
+        if (!window.__gdriveUniversalDownloader) {
+          window.__gdriveUniversalDownloader = { capturedVideoURLs: new Set(), hooksInstalled: false };
+        }
+        const g = window.__gdriveUniversalDownloader;
+        g.settings          = s;
+        g.log               = [];
+        g.recording         = false;
+        g.runComplete       = false;
+        g.selectedResources = sel;
+        g.detectedType      = type;
       },
       args: [settings, selectedResources, currentType],
     });
