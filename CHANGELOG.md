@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3] - 2026-03-20
+
+### Fixed
+- **Silent log blackout ("stuck at Starting")**: the init script was mutating properties on the existing GUD object. If the page or a SPA had reassigned `window.__gdriveUniversalDownloader` at any point, downloader.js would hold a stale local reference and push logs to an object that polling was no longer reading. Fix: the init script now rebuilds GUD as a completely new object (preserving `capturedVideoURLs`), guaranteeing that downloader.js and polling always share the same reference.
+- **Button stuck forever**: added a 90-second safety timeout in `startPolling`; if no completion signal is received, the button re-enables and shows a hint.
+- **No feedback when GUD is null**: downloader.js now writes an error message to a fresh namespace object (instead of silently returning) so the popup can display it.
+
 ## [3.0.2] - 2026-03-20
 
 ### Fixed
