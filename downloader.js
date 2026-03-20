@@ -22,7 +22,6 @@
   // page reassigns window.__gdriveUniversalDownloader between executeScript
   // calls, the popup polling still sees the messages.
   const log = (msg) => {
-    console.log(msg);
     const g = window.__gdriveUniversalDownloader || GUD;
     g.log = g.log || [];
     g.log.push(msg);
@@ -327,11 +326,23 @@
         .catch(e => { clearTimeout(timer); throw e; });
     };
 
+    const MAX_DOWNLOADS = 50;
+    if (selected.length > MAX_DOWNLOADS) {
+      log(`❌ Too many items selected (max ${MAX_DOWNLOADS}). Deselect some and retry.`);
+      markComplete();
+      return;
+    }
+
     log(`⬇ Downloading ${selected.length} item(s)...`);
     // Wrap in async IIFE — await is not valid in the non-async outer IIFE
     (async () => {
       let done = 0;
       for (const item of selected) {
+        // Block non-http(s) URLs (defence-in-depth — popup also filters)
+        if (!/^https?:\/\//i.test(item.src)) {
+          log(`⚠️ Skipping ${item.filename}: blocked URL protocol`);
+          continue;
+        }
         try {
           if (item.type === 'image') {
             try {

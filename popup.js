@@ -207,7 +207,16 @@ const renderYoutubeFormatPicker = (formats) => {
   youtubeFormatList.innerHTML = '';
   selectedYoutubeFormat = null;
 
-  const addItem = (icon, label, sublabel, value, isFirst) => {
+  // badge = null | { text, style? }  — never use innerHTML, always textContent + DOM node
+  const makeBadge = (text, style) => {
+    const el = document.createElement('span');
+    el.className   = 'format-badge';
+    el.textContent = text;
+    if (style) el.setAttribute('style', style);
+    return el;
+  };
+
+  const addItem = (icon, text, badge, sublabel, value, isFirst) => {
     const div = document.createElement('div');
     div.className = 'resource-item';
 
@@ -224,8 +233,9 @@ const renderYoutubeFormatPicker = (formats) => {
     info.className = 'ri-info';
 
     const nameEl = document.createElement('div');
-    nameEl.className = 'ri-name';
-    nameEl.innerHTML = label;
+    nameEl.className   = 'ri-name';
+    nameEl.textContent = text;                      // safe — no innerHTML
+    if (badge) nameEl.appendChild(makeBadge(badge.text, badge.style));
 
     const metaEl = document.createElement('div');
     metaEl.className   = 'ri-meta';
@@ -250,6 +260,10 @@ const renderYoutubeFormatPicker = (formats) => {
     if (isFirst) select();
   };
 
+  const HD_TEAL = { text: 'HD', style: 'background:#1a2a3a;color:#80cbc4' };
+  const HD_BLUE = { text: 'HD' };
+  const hdBadge = (h) => h >= 1080 ? HD_TEAL : h >= 720 ? HD_BLUE : null;
+
   // ── Section 1: With Audio via MediaRecorder ──────────────────────
   const mrHeader = document.createElement('div');
   mrHeader.className   = 'resource-section-header';
@@ -268,8 +282,8 @@ const renderYoutubeFormatPicker = (formats) => {
   };
 
   // Auto — no quality change, record whatever is currently playing
-  addItem('🎥',
-    'Auto <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">current quality</span>',
+  addItem('🎥', 'Auto',
+    { text: 'current quality', style: 'background:#1a2a3a;color:#80cbc4' },
     'MediaRecorder · keep tab open',
     { type: 'mediarecorder', quality: 'auto', qualityLabel: 'Auto' },
     true);
@@ -277,10 +291,7 @@ const renderYoutubeFormatPicker = (formats) => {
   // One entry per unique height, sorted high → low
   const heights = [...new Set(formats.map(f => f.height))].sort((a, b) => b - a);
   heights.forEach(h => {
-    const badge = h >= 1080
-      ? ` <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">HD</span>`
-      : h >= 720 ? ' <span class="format-badge">HD</span>' : '';
-    addItem('🎥', `${h}p${badge}`,
+    addItem('🎥', `${h}p`, hdBadge(h),
       'MediaRecorder · keep tab open',
       { type: 'mediarecorder', quality: ytQ(h), qualityLabel: `${h}p`, height: h },
       false);
@@ -296,10 +307,7 @@ const renderYoutubeFormatPicker = (formats) => {
     formats.forEach(f => {
       const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
       const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
-      const badge = f.height >= 1080
-        ? ` <span class="format-badge" style="background:#1a2a3a;color:#80cbc4">HD</span>`
-        : f.height >= 720 ? ' <span class="format-badge">HD</span>' : '';
-      addItem('🎬', f.qualityLabel + badge, `${ext}  ${size} · no audio`,
+      addItem('🎬', f.qualityLabel, hdBadge(f.height), `${ext}  ${size} · no audio`,
         { type: 'direct', url: f.url, qualityLabel: f.qualityLabel, mimeType: f.mimeType, sizeMB: f.sizeMB },
         false);
     });
@@ -422,6 +430,11 @@ downloadBtn.addEventListener('click', async () => {
         .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 180) || 'video';
       const ext      = selectedYoutubeFormat.mimeType === 'video/webm' ? 'webm' : 'mp4';
       const filename = safeTitle + '.' + ext;
+      // Validate URL is a safe googlevideo.com HTTPS URL before downloading
+      const dlUrl = new URL(selectedYoutubeFormat.url);
+      if (dlUrl.protocol !== 'https:' || !/googlevideo\.com$/.test(dlUrl.hostname)) {
+        throw new Error('Unexpected download URL origin');
+      }
       appendLog(`⬇ Downloading ${selectedYoutubeFormat.qualityLabel} ${ext.toUpperCase()} (no audio)...`);
       await chrome.downloads.download({ url: selectedYoutubeFormat.url, filename });
       appendLog('✅ Check your downloads folder.');
@@ -452,6 +465,8 @@ downloadBtn.addEventListener('click', async () => {
           });
         }
       });
+      // Drop any items with non-http(s) URLs (security: block javascript:, data:, etc.)
+      selectedResources = selectedResources.filter(item => /^https?:\/\//i.test(item.src));
       if (selectedResources.length === 0) {
         appendLog('⚠️ No items selected.');
         setBtnState(false);

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.1] - 2026-03-20
+
+### Security
+- **XSS fix**: replaced `innerHTML` with `textContent` + DOM-constructed badge elements in the YouTube quality picker — page-supplied format labels can no longer inject HTML into the popup.
+- **URL validation**: YouTube video-only direct downloads now verify the URL is `https://` and originates from `googlevideo.com` before calling `chrome.downloads.download`.
+- **URL allow-list in universal mode**: `selectedResources` items with non-`http(s)` URLs (e.g. `javascript:`, `data:`) are stripped in both popup.js and downloader.js before any download is attempted.
+- **Download cap**: universal mode now rejects batches larger than 50 items to prevent resource exhaustion.
+- **CSP**: added `content_security_policy` to manifest — extension pages are restricted to `script-src 'self'; object-src 'self'`.
+- **Log privacy**: removed `console.log` from the internal `log()` function so download URLs and titles are no longer visible to page scripts via the browser console.
+
 ## [3.3.0] - 2026-03-20
 
 ### Changed
