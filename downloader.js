@@ -1,4 +1,4 @@
-// GDrive Universal Downloader v3.0.6 — Injected Logic
+// GDrive Universal Downloader v3.0.7 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
@@ -15,15 +15,21 @@
   const QUALITY      = cfg.quality     ?? 0.82;
   const SCROLL_DELAY = cfg.scrollDelay ?? 200;
 
+  // Always write through the live window reference so that even if the
+  // page reassigns window.__gdriveUniversalDownloader between executeScript
+  // calls, the popup polling still sees the messages.
   const log = (msg) => {
     console.log(msg);
-    GUD.log = GUD.log || [];
-    GUD.log.push(msg);
+    const g = window.__gdriveUniversalDownloader || GUD;
+    g.log = g.log || [];
+    g.log.push(msg);
   };
 
   const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
   GUD.runComplete = false;
-  const markComplete = () => { GUD.runComplete = true; };
+  const markComplete = () => {
+    (window.__gdriveUniversalDownloader || GUD).runComplete = true;
+  };
 
   const MIME_EXTENSION_MAP = {
     'video/mp4': 'mp4',
@@ -170,13 +176,14 @@
       videoEl.play().catch(e => log('⚠️ Playback error: ' + e.message));
       recorder.start(1000);
       log('🔴 Recording started (' + mimeType + ')');
-      GUD.recording = true;
-      GUD.stopRecording = () => {
+      const setGUDProp = (k, v) => { (window.__gdriveUniversalDownloader || GUD)[k] = v; };
+      setGUDProp('recording', true);
+      setGUDProp('stopRecording', () => {
         if (recorder.state === 'inactive') return;
         recorder.requestData();
-        setTimeout(() => { recorder.stop(); GUD.recording = false; log('⏹ Stopped.'); }, 200);
-      };
-      videoEl.addEventListener('ended', () => { GUD.recording = false; GUD.stopRecording(); }, { once: true });
+        setTimeout(() => { recorder.stop(); setGUDProp('recording', false); log('⏹ Stopped.'); }, 200);
+      });
+      videoEl.addEventListener('ended', () => { setGUDProp('recording', false); (window.__gdriveUniversalDownloader || GUD).stopRecording?.(); }, { once: true });
       return;
     }
 

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.7] - 2026-03-20
+
+### Fixed
+- **Log blackout (root cause)**: `downloader.js` captured `window.__gdriveUniversalDownloader` into a local `GUD` variable at injection time. If YouTube (or any SPA) reassigned that global between `executeScript` calls, `log()` and `markComplete()` were writing to a stale object that polling never reads. Fix: `log`, `markComplete`, and all recording-state assignments now always read through the live `window.__gdriveUniversalDownloader` reference, so messages are always visible regardless of any GUD reassignment.
+
 ## [3.0.6] - 2026-03-20
 
 ### Fixed
