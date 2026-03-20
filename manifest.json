@@ -2,14 +2,9 @@
   "manifest_version": 3,
   "name": "GDrive Universal Downloader",
   "version": "2.5.3",
-  "description": "Download Google Drive files: view-only PDFs, Docs, Sheets, Slides, videos & more.",
+  "description": "Download images, PDFs, and videos from any webpage, plus Google Drive and YouTube.",
   "permissions": ["activeTab", "scripting"],
-  "host_permissions": [
-    "https://drive.google.com/*",
-    "https://docs.google.com/*",
-    "https://www.youtube.com/*",
-    "https://youtube.com/*"
-  ],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
@@ -20,12 +15,7 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://drive.google.com/*",
-        "https://docs.google.com/*",
-        "https://www.youtube.com/*",
-        "https://youtube.com/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": ["content-hooks.js"],
       "world": "MAIN",
       "run_at": "document_start"

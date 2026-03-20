@@ -290,6 +290,63 @@
     return;
   }
 
+  // ── Strategy: Universal (images / videos / PDFs from any page) ──
+  if (type === 'universal') {
+    const selected = GUD.selectedResources || [];
+    if (selected.length === 0) {
+      log('⚠️ No items selected.');
+      markComplete();
+      return;
+    }
+    log(`⬇ Downloading ${selected.length} item(s)...`);
+    let done = 0;
+    for (const item of selected) {
+      try {
+        if (item.type === 'image') {
+          // Try fetch→blob first (forces a real download even for cross-origin images)
+          try {
+            const resp = await fetch(item.src, { credentials: 'include' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob    = await resp.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            triggerDownload(blobUrl, item.filename);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          } catch (fetchErr) {
+            // Fall back to direct link (may open in new tab for cross-origin)
+            log(`⚠️ Fetch failed for ${item.filename}, trying direct link...`);
+            triggerDownload(item.src, item.filename);
+          }
+        } else if (item.type === 'video') {
+          // Try captured XHR URLs first, then direct src
+          const capturedArr = [...capturedVideoURLs];
+          const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
+          const ext = inferExtension(matchedUrl, '', 'mp4');
+          const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
+          try {
+            const resp = await fetch(matchedUrl, { credentials: 'include' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob    = await resp.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            triggerDownload(blobUrl, filename);
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          } catch (fetchErr) {
+            triggerDownload(matchedUrl, filename);
+          }
+        } else if (item.type === 'pdf') {
+          triggerDownload(item.src, item.filename);
+        }
+        log(`✅ ${item.filename}`);
+        done++;
+        await sleep(400); // small gap between downloads
+      } catch (err) {
+        log(`❌ ${item.filename}: ${err.message}`);
+      }
+    }
+    log(`🎉 Done! ${done}/${selected.length} downloaded.`);
+    markComplete();
+    return;
+  }
+
   log('⚠️ Auto-detect failed. Refresh and try again.');
   markComplete();
 })();

@@ -213,6 +213,68 @@
     .footer a { color: #5060a0; text-decoration: none; }
     .footer a:hover { color: #7080c0; }
 
+    /* Resource picker */
+    .resource-picker { padding: 0 16px 10px; }
+    .resource-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .resource-count { font-size: 11px; color: #7080a0; }
+    .resource-ctrl-btns { display: flex; gap: 6px; }
+    .resource-ctrl-btns button {
+      font-size: 10px;
+      padding: 2px 8px;
+      border: 1px solid #3a3a6a;
+      background: #1a1a3a;
+      color: #7080c0;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .resource-ctrl-btns button:hover { background: #2a2a5a; }
+    .resource-list {
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      background: #0d0d1a;
+    }
+    .resource-section-header {
+      font-size: 9.5px;
+      font-weight: 700;
+      color: #5060a0;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      padding: 4px 8px 2px;
+      background: #111128;
+      border-bottom: 1px solid #1a1a3a;
+      position: sticky;
+      top: 0;
+    }
+    .resource-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-bottom: 1px solid #131326;
+      cursor: pointer;
+      user-select: none;
+    }
+    .resource-item:last-child { border-bottom: none; }
+    .resource-item:hover { background: #1a1a2e; }
+    .resource-item input[type="checkbox"] { flex-shrink: 0; accent-color: #5272e0; }
+    .resource-item .ri-icon { font-size: 13px; flex-shrink: 0; }
+    .resource-item .ri-info { flex: 1; min-width: 0; }
+    .resource-item .ri-name {
+      font-size: 10.5px;
+      color: #a0b0d0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .resource-item .ri-meta { font-size: 9.5px; color: #5060a0; }
+
     /* Unsupported page */
     .unsupported {
       padding: 20px 16px;
@@ -255,6 +317,18 @@
       </div>
     </div>
 
+    <!-- Universal resource picker (shown for 'universal' type) -->
+    <div class="resource-picker" id="resourcePicker" style="display:none">
+      <div class="resource-controls">
+        <span class="resource-count" id="resourceCount">0 selected</span>
+        <div class="resource-ctrl-btns">
+          <button id="selectAllBtn">All</button>
+          <button id="selectNoneBtn">None</button>
+        </div>
+      </div>
+      <div class="resource-list" id="resourceList"></div>
+    </div>
+
     <!-- Video recording note -->
     <div class="video-note" id="videoNote">
       ⚠️ YouTube: Records the live stream via MediaRecorder.<br>
@@ -280,8 +354,8 @@
 
   <div id="unsupportedContent" style="display:none">
     <div class="unsupported">
-      <div class="icon">🌐</div>
-      Open a Google Drive or YouTube page<br>then click this extension.
+      <div class="icon">🚫</div>
+      No downloadable content detected<br>on this page.
     </div>
   </div>
 

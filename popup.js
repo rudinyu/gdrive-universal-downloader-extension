@@ -12,25 +12,29 @@ const TYPE_META = {
   'image':       { icon: '🖼️',  label: 'Image',            pdf: false },
   'text':        { icon: '📃', label: 'Text File',        pdf: false },
   'file-export': { icon: '📁', label: 'File (Drive)',     pdf: false },
+  'universal':   { icon: '🌐', label: 'Universal Picker', pdf: false },
   'unknown':     { icon: '❓', label: 'Unknown',          pdf: false },
 };
 
-const SUPPORTED_HOSTS = ['drive.google.com', 'docs.google.com', 'youtube.com', 'www.youtube.com'];
-
 // ── DOM refs ─────────────────────────────────────────────────────
-const typeBadge   = document.getElementById('typeBadge');
-const pdfSettings = document.getElementById('pdfSettings');
-const videoNote   = document.getElementById('videoNote');
-const downloadBtn = document.getElementById('downloadBtn');
-const btnIcon     = document.getElementById('btnIcon');
-const btnText     = document.getElementById('btnText');
-const stopBtn     = document.getElementById('stopBtn');
-const logBox      = document.getElementById('logBox');
-const scaleSlider = document.getElementById('scaleSlider');
-const scaleVal    = document.getElementById('scaleVal');
-const qualitySlider = document.getElementById('qualitySlider');
-const qualityVal  = document.getElementById('qualityVal');
-const mainContent       = document.getElementById('mainContent');
+const typeBadge      = document.getElementById('typeBadge');
+const pdfSettings    = document.getElementById('pdfSettings');
+const videoNote      = document.getElementById('videoNote');
+const resourcePicker = document.getElementById('resourcePicker');
+const resourceList   = document.getElementById('resourceList');
+const resourceCount  = document.getElementById('resourceCount');
+const selectAllBtn   = document.getElementById('selectAllBtn');
+const selectNoneBtn  = document.getElementById('selectNoneBtn');
+const downloadBtn    = document.getElementById('downloadBtn');
+const btnIcon        = document.getElementById('btnIcon');
+const btnText        = document.getElementById('btnText');
+const stopBtn        = document.getElementById('stopBtn');
+const logBox         = document.getElementById('logBox');
+const scaleSlider    = document.getElementById('scaleSlider');
+const scaleVal       = document.getElementById('scaleVal');
+const qualitySlider  = document.getElementById('qualitySlider');
+const qualityVal     = document.getElementById('qualityVal');
+const mainContent        = document.getElementById('mainContent');
 const unsupportedContent = document.getElementById('unsupportedContent');
 
 let currentTabId = null;
@@ -58,7 +62,11 @@ const appendLog = (msg) => {
 const setBtnState = (running) => {
   downloadBtn.disabled = running;
   btnIcon.textContent  = running ? '⏳' : '⬇';
-  btnText.textContent  = running ? 'Running...' : 'Download';
+  if (!running && currentType === 'universal') {
+    updateResourceCount(); // restore "Download (N)" label
+  } else {
+    btnText.textContent = running ? 'Running...' : 'Download';
+  }
 };
 
 const startPolling = (tabId) => {
@@ -89,10 +97,92 @@ const startPolling = (tabId) => {
   }, 500);
 };
 
+// ── Universal resource picker ────────────────────────────────────
+const getFilenameFromUrl = (src, mediaType, index) => {
+  try {
+    const parts = new URL(src).pathname.split('/');
+    const name  = decodeURIComponent(parts[parts.length - 1] || '');
+    if (name && /\.[a-z0-9]{2,5}$/i.test(name)) return name;
+  } catch (e) { /* ignore */ }
+  const exts = { image: 'jpg', video: 'mp4', pdf: 'pdf' };
+  return `${mediaType}-${index + 1}.${exts[mediaType] || 'bin'}`;
+};
+
+const updateResourceCount = () => {
+  const items   = resourceList.querySelectorAll('.resource-item');
+  const checked = resourceList.querySelectorAll('.resource-item input:checked').length;
+  downloadBtn.disabled = checked === 0;
+  btnText.textContent  = checked > 0 ? `Download (${checked})` : 'Select items';
+  resourceCount.textContent = `${checked} / ${items.length} selected`;
+};
+
+const renderResourcePicker = (resources) => {
+  resourcePicker.style.display = 'block';
+  resourceList.innerHTML = '';
+
+  const ICONS = { image: '🖼️', video: '🎬', pdf: '📄' };
+
+  const renderSection = (items, mediaType, title) => {
+    if (items.length === 0) return;
+    const header = document.createElement('div');
+    header.className = 'resource-section-header';
+    header.textContent = `${title} (${items.length})`;
+    resourceList.appendChild(header);
+
+    items.forEach((item, i) => {
+      const filename = getFilenameFromUrl(item.src, mediaType, i);
+      const div = document.createElement('div');
+      div.className   = 'resource-item';
+      div.dataset.src      = item.src;
+      div.dataset.type     = mediaType;
+      div.dataset.filename = filename;
+
+      const cb = document.createElement('input');
+      cb.type    = 'checkbox';
+      cb.checked = true;
+
+      const icon = document.createElement('span');
+      icon.className   = 'ri-icon';
+      icon.textContent = ICONS[mediaType];
+
+      const info = document.createElement('div');
+      info.className = 'ri-info';
+
+      const name = document.createElement('div');
+      name.className   = 'ri-name';
+      name.textContent = filename;
+      name.title       = item.src;
+
+      const meta = document.createElement('div');
+      meta.className   = 'ri-meta';
+      meta.textContent = mediaType === 'image'
+        ? `${item.w} × ${item.h}`
+        : mediaType.toUpperCase();
+
+      info.appendChild(name);
+      info.appendChild(meta);
+      div.appendChild(cb);
+      div.appendChild(icon);
+      div.appendChild(info);
+      resourceList.appendChild(div);
+
+      div.addEventListener('click', (e) => {
+        if (e.target !== cb) cb.checked = !cb.checked;
+        updateResourceCount();
+      });
+    });
+  };
+
+  renderSection(resources.images, 'image', 'Images');
+  renderSection(resources.videos, 'video', 'Videos');
+  renderSection(resources.pdfs,   'pdf',   'PDFs');
+  updateResourceCount();
+};
+
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || !SUPPORTED_HOSTS.some(h => new URL(tab.url).hostname.includes(h))) {
+  if (!tab || !tab.url || /^chrome(-extension)?:\/\//i.test(tab.url)) {
     mainContent.style.display = 'none';
     unsupportedContent.style.display = 'block';
     return;
@@ -100,7 +190,6 @@ async function init() {
   currentTabId = tab.id;
 
   try {
-    // Inject shared detection script and read result
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
@@ -109,22 +198,53 @@ async function init() {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       world: 'MAIN',
-      func: () => window.__gdriveUniversalDownloader?.detectedType || 'unknown',
+      func: () => {
+        const GUD = window.__gdriveUniversalDownloader || {};
+        return {
+          type: GUD.detectedType || 'unknown',
+          resources: GUD.universalResources
+            ? {
+                images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h })),
+                videos: (GUD.universalResources.videos || []).map(v => ({ src: v.src })),
+                pdfs:   (GUD.universalResources.pdfs   || []).map(p => ({ src: p.src })),
+              }
+            : null,
+        };
+      },
     });
-    const type = results?.[0]?.result || 'unknown';
-    currentType = type;
-    const meta = TYPE_META[type] || TYPE_META['unknown'];
+
+    const { type, resources } = results?.[0]?.result || {};
+    currentType = type || 'unknown';
+    const meta = TYPE_META[currentType] || TYPE_META['unknown'];
     typeBadge.textContent = meta.icon + ' ' + meta.label;
-    typeBadge.className   = 'type-badge ' + type;
+    typeBadge.className   = 'type-badge ' + currentType;
+
     if (meta.pdf)   pdfSettings.classList.add('visible');
     if (meta.video) videoNote.classList.add('visible');
-    if (type !== 'unknown') downloadBtn.disabled = false;
-  } catch (e) { appendLog('⚠️ Access denied. Refresh page.'); }
+
+    if (currentType === 'universal' && resources) {
+      renderResourcePicker(resources);
+      // download button enabled/disabled controlled by updateResourceCount()
+    } else if (currentType !== 'unknown') {
+      downloadBtn.disabled = false;
+    }
+  } catch (e) {
+    appendLog('⚠️ Access denied. Refresh the page and try again.');
+  }
 }
 
 // ── Events ───────────────────────────────────────────────────────
-scaleSlider.addEventListener('input', () => scaleVal.textContent = parseFloat(scaleSlider.value).toFixed(1));
+scaleSlider.addEventListener('input',   () => scaleVal.textContent   = parseFloat(scaleSlider.value).toFixed(1));
 qualitySlider.addEventListener('input', () => qualityVal.textContent = parseFloat(qualitySlider.value).toFixed(2));
+
+selectAllBtn.addEventListener('click', () => {
+  resourceList.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+  updateResourceCount();
+});
+selectNoneBtn.addEventListener('click', () => {
+  resourceList.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+  updateResourceCount();
+});
 
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
@@ -134,25 +254,43 @@ downloadBtn.addEventListener('click', async () => {
   appendLog('▶ Starting...');
 
   try {
+    // Collect selected resources for universal mode
+    let selectedResources = null;
+    if (currentType === 'universal') {
+      selectedResources = [];
+      resourceList.querySelectorAll('.resource-item').forEach(div => {
+        const cb = div.querySelector('input[type="checkbox"]');
+        if (cb?.checked) {
+          selectedResources.push({
+            type:     div.dataset.type,
+            src:      div.dataset.src,
+            filename: div.dataset.filename,
+          });
+        }
+      });
+      if (selectedResources.length === 0) {
+        appendLog('⚠️ No items selected.');
+        setBtnState(false);
+        return;
+      }
+    }
+
     // 1. Initialize namespace and settings
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       world: 'MAIN',
-      func: (s) => {
+      func: (s, sel) => {
         window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || { capturedVideoURLs: new Set() };
-        window.__gdriveUniversalDownloader.settings = s;
-        window.__gdriveUniversalDownloader.log = [];
-        window.__gdriveUniversalDownloader.runComplete = false;
+        window.__gdriveUniversalDownloader.settings         = s;
+        window.__gdriveUniversalDownloader.log              = [];
+        window.__gdriveUniversalDownloader.runComplete      = false;
+        window.__gdriveUniversalDownloader.selectedResources = sel;
       },
-      args: [settings],
+      args: [settings, selectedResources],
     });
 
     // 2. Re-run detection and inject dependencies
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      world: 'MAIN',
-      files: ['detect.js'],
-    });
+    await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['detect.js'] });
     if (currentType === 'blob-pdf') {
       await chrome.scripting.executeScript({ target: { tabId: currentTabId }, world: 'MAIN', files: ['lib/jspdf.umd.min.js'] });
     }
