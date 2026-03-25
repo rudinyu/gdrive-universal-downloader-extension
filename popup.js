@@ -482,6 +482,28 @@ downloadBtn.addEventListener('click', async () => {
         setBtnState(false);
         return;
       }
+
+      // ── Fast path: images and PDFs only ───────────────────────────
+      // chrome.downloads.download() bypasses CORS entirely — no content
+      // script needed. Cross-origin <a download> silently navigates
+      // instead of downloading, so we never use that path for images.
+      const hasVideos = selectedResources.some(r => r.type === 'video');
+      if (!hasVideos) {
+        let done = 0;
+        for (const item of selectedResources) {
+          try {
+            await chrome.downloads.download({ url: item.src, filename: item.filename });
+            appendLog(`✅ ${item.filename}`);
+            done++;
+          } catch (err) {
+            appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
+          }
+          await new Promise(r => setTimeout(r, 300));
+        }
+        appendLog(`🎉 Done! ${done}/${selectedResources.length} downloaded.`);
+        setBtnState(false);
+        return;
+      }
     }
 
     // ── Step 1: set up GUD namespace ────────────────────────────────
