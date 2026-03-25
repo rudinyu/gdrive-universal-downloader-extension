@@ -14,6 +14,7 @@ A Chrome & Firefox Extension that auto-detects downloadable content on **any web
 
 - **Chrome & Firefox support** — works on both browsers (Firefox 128+, Chrome MV3)
 - **Universal downloader** — works on any webpage, not just Google Drive and YouTube
+- **Preload image detection** — captures images declared via `<link rel="preload" as="image">`, not just `<img>` tags
 - **Resource picker** — scans the page and shows a selectable list of images, videos, and PDFs with checkboxes
 - **YouTube quality picker** — choose resolution (Auto / 360p / 480p / 720p / 1080p / …) before recording; the player switches to the selected quality so MediaRecorder captures it with full audio
 - **One-click download** — click the extension icon, hit Download
@@ -172,6 +173,7 @@ A Chrome & Firefox Extension that auto-detects downloadable content on **any web
 
 - **支援 Chrome & Firefox** — 同時支援兩種瀏覽器（Firefox 128+、Chrome MV3）
 - **通用下載器** — 不限 Google Drive 和 YouTube，任意網頁均可使用
+- **Preload 圖片偵測** — 可抓取透過 `<link rel="preload" as="image">` 宣告的圖片，不限 `<img>` 標籤
 - **資源選擇器** — 掃描頁面並顯示可勾選的圖片、影片、PDF 清單
 - **YouTube 畫質選擇器** — 可選擇解析度（Auto / 360p / 480p / 720p / 1080p / …）再錄製；播放器會切換到指定畫質，MediaRecorder 錄到的影片有完整聲音
 - **一鍵下載** — 點擊擴充功能圖示，按 Download 即可
