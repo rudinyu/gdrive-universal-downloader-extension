@@ -144,17 +144,28 @@ const updateResourceCount = () => {
 const resolvePreloadImages = async (images) => {
   return Promise.all(images.map(async (img) => {
     if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
+    appendLog(`🔍 resolving preload: ${img.src}`);
     try {
       const resp = await fetch(img.src);
       const ct   = resp.headers.get('content-type') || '';
-      if (!ct.includes('text/html')) return img;
-      const doc   = new DOMParser().parseFromString(await resp.text(), 'text/html');
+      appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
+      if (!ct.includes('text/html')) {
+        appendLog(`🔍 not HTML — using URL as-is`);
+        return img;
+      }
+      const text = await resp.text();
+      const doc  = new DOMParser().parseFromString(text, 'text/html');
       const found = [...doc.querySelectorAll('img[src]')]
         .map(el => new URL(el.getAttribute('src'), resp.url).href)
         .find(src => /^https?:\/\//i.test(src));
-      if (!found) return img;
+      if (!found) {
+        appendLog(`⚠️ no <img> found in HTML wrapper`);
+        return img;
+      }
+      appendLog(`✓ resolved → ${found}`);
       return { ...img, src: found, referer: img.src };
-    } catch {
+    } catch (e) {
+      appendLog(`⚠️ fetch failed: ${e?.message || String(e)}`);
       return img;
     }
   }));
@@ -521,17 +532,27 @@ downloadBtn.addEventListener('click', async () => {
       if (!hasVideos) {
         let done = 0;
         for (const item of selectedResources) {
+          const referer = item.referer || currentTabUrl;
+          appendLog(`🔍 url: ${item.src}`);
+          appendLog(`🔍 referer: ${referer || '(none)'}`);
           try {
             const dlOptions = { url: item.src, filename: item.filename };
-            // Use the resolved preload URL as Referer (for anti-hotlinking CDNs),
-            // falling back to the current tab URL for regular images.
-            const referer = item.referer || currentTabUrl;
             if (referer) dlOptions.headers = [{ name: 'Referer', value: referer }];
+            appendLog(`🔍 dlOptions: ${JSON.stringify(dlOptions)}`);
             await chrome.downloads.download(dlOptions);
             appendLog(`✅ ${item.filename}`);
             done++;
           } catch (err) {
-            appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
+            appendLog(`⚠️ header attempt failed: ${err?.message || String(err)}`);
+            // Referer is a restricted header in chrome.downloads — retry without it
+            try {
+              appendLog(`🔍 retrying without custom headers...`);
+              await chrome.downloads.download({ url: item.src, filename: item.filename });
+              appendLog(`✅ ${item.filename} (no custom header)`);
+              done++;
+            } catch (err2) {
+              appendLog(`❌ ${item.filename}: ${err2?.message || String(err2)}`);
+            }
           }
           await new Promise(r => setTimeout(r, 300));
         }
