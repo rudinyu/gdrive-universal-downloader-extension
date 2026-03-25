@@ -1,11 +1,11 @@
-// GDrive Universal Downloader v3.5.8 — Injected Logic
+// GDrive Universal Downloader v3.5.9 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
   // Marker so popup can verify the IIFE actually executed
   window.__gudRunMarker = Date.now();
 
-  const VERSION = '3.5.8';
+  const VERSION = '3.5.9';
   const CONFIG = {
     DEFAULT_SCALE: 1.0,
     DEFAULT_QUALITY: 0.82,

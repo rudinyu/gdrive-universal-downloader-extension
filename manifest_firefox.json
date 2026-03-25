@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GDrive Universal Downloader",
-  "version": "3.5.8",
+  "version": "3.5.9",
   "browser_specific_settings": {
     "gecko": {
       "id": "gdrive-universal-downloader@extension",
