@@ -704,23 +704,22 @@ downloadBtn.addEventListener('click', async () => {
               URL.revokeObjectURL(blobUrl);
               appendLog(`✅ ${filename}`);
             } else if (item.type === 'video') {
-              // Videos come from <video currentSrc> — always real URLs (browser is playing them).
-              // Skip resolution; download directly via chrome.downloads which uses the browser's
-              // download manager (sends cookies, same network stack as browser).
-              // Set Referer via DNR rule and keep it alive long enough for the HTTP request to go out.
-              const ruleId = (referer && chrome.declarativeNetRequest?.updateSessionRules) ? ++_ruleId : null;
-              if (ruleId) {
-                const hostname = new URL(item.src).hostname;
-                await chrome.declarativeNetRequest.updateSessionRules({
-                  addRules: [{ id: ruleId, priority: 1,
-                    action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }] },
-                    condition: { urlFilter: `||${hostname}/` }
-                  }]
-                });
-              }
-              await chrome.downloads.download({ url: item.src, filename: item.filename });
-              await new Promise(r => setTimeout(r, 3000));
-              if (ruleId) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+              // Execute download from page context so the request carries the page's
+              // cookies and auto-Referer — chrome.downloads misses these and gets 403.
+              // Cross-origin <a download> may briefly navigate to the video URL but
+              // the download still triggers (confirmed behaviour).
+              await chrome.scripting.executeScript({
+                target: { tabId: currentTabId }, world: 'MAIN',
+                func: (url, fname) => {
+                  const a = document.createElement('a');
+                  a.href = url; a.download = fname;
+                  a.style.display = 'none';
+                  document.body.appendChild(a);
+                  a.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: false }));
+                  document.body.removeChild(a);
+                },
+                args: [item.src, item.filename],
+              });
               appendLog(`✅ ${item.filename}`);
             } else {
               // pdf — resolve HTML wrappers if present, then direct download
