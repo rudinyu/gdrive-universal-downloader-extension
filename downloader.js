@@ -104,8 +104,12 @@
   const triggerDownload = (url, filename) => {
     const a = document.createElement('a');
     a.href = url; a.download = filename;
+    a.style.display = 'none';
     document.body.appendChild(a);
-    a.click();
+    // Use bubbles:false so SPA routers / event-delegation handlers on
+    // parent elements never see this synthetic click (prevents manga
+    // readers and image viewers from jumping to page 1).
+    a.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: false }));
     document.body.removeChild(a);
   };
 
