@@ -79,55 +79,66 @@ async function withReferer(targetUrl, referer, fn) {
   }
 }
 
-// Fetch a URL with an optional Referer header (via declarativeNetRequest).
-// If the response is an HTML wrapper page, parse it to find the real <img src>
-// and fetch that instead (using the page URL as Referer).
-// Returns { blobUrl, filename } — blobUrl is a local blob:// URL, so
-// chrome.downloads.download() never makes a network request and anti-hotlinking
-// cannot interfere.  Caller must call URL.revokeObjectURL(blobUrl) when done.
-async function fetchAsBlob(url, referer, filename) {
-  const fetchOne = async (targetUrl, ref) => {
-    const ruleId = (ref && chrome.declarativeNetRequest?.updateSessionRules) ? ++_ruleId : null;
-    if (ruleId) {
-      const hostname = new URL(targetUrl).hostname;
-      await chrome.declarativeNetRequest.updateSessionRules({
-        addRules: [{ id: ruleId, priority: 1,
-          action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: ref }] },
-          condition: { urlFilter: `||${hostname}/` }
-        }]
-      });
-    }
-    try {
-      // fetch() is awaited here — rule is active for the full request lifecycle
-      return await fetch(targetUrl);
-    } finally {
-      if (ruleId) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
-    }
-  };
+// Fetch targetUrl with an optional Referer header via declarativeNetRequest.
+// fetch() is properly awaited so the rule is active for the entire request.
+async function fetchWithReferer(targetUrl, referer) {
+  const ruleId = (referer && chrome.declarativeNetRequest?.updateSessionRules) ? ++_ruleId : null;
+  if (ruleId) {
+    const hostname = new URL(targetUrl).hostname;
+    await chrome.declarativeNetRequest.updateSessionRules({
+      addRules: [{ id: ruleId, priority: 1,
+        action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }] },
+        condition: { urlFilter: `||${hostname}/` }
+      }]
+    });
+  }
+  try {
+    return await fetch(targetUrl);
+  } finally {
+    if (ruleId) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+  }
+}
 
-  let resp = await fetchOne(url, referer);
+// Fetch url; if the response is an HTML wrapper page, parse it to find
+// the real media URL (video > source > img element order).
+// Returns { resolvedUrl, filename, resp } where resp is the Response for
+// the original URL if it was NOT HTML (caller can read its body directly),
+// or null if it WAS HTML (caller must fetch resolvedUrl separately).
+async function resolveUrlIfHtml(url, referer, filename) {
+  const resp = await fetchWithReferer(url, referer);
   const ct = resp.headers.get('content-type') || '';
   appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
 
-  if (ct.includes('text/html')) {
-    // HTML wrapper — parse to find real image URL
-    appendLog(`🔍 HTML wrapper detected — parsing for real image`);
-    const text = await resp.text();
-    const doc  = new DOMParser().parseFromString(text, 'text/html');
-    const found = [...doc.querySelectorAll('img[src]')]
-      .map(el => new URL(el.getAttribute('src'), resp.url).href)
-      .find(src => /^https?:\/\//i.test(src));
-    if (!found) throw new Error('HTML wrapper: no <img src> found inside');
-    appendLog(`✓ resolved → ${found}`);
-    // Fetch the real image; CDN expects the page URL as Referer, not the wrapper URL
-    resp = await fetchOne(found, currentTabUrl);
-    // Derive filename from the resolved URL
-    const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
-    if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
+  if (!ct.includes('text/html')) {
+    return { resolvedUrl: url, filename, resp };  // not a wrapper — resp body still open
   }
 
+  appendLog(`🔍 HTML wrapper — parsing for real media URL`);
+  const text = await resp.text();
+  const doc  = new DOMParser().parseFromString(text, 'text/html');
+  const found = [...doc.querySelectorAll('video[src], source[src], img[src]')]
+    .map(el => { try { return new URL(el.getAttribute('src'), resp.url).href; } catch { return null; } })
+    .find(src => src && /^https?:\/\//i.test(src));
+  if (!found) throw new Error('HTML wrapper: no media URL found inside');
+  appendLog(`✓ resolved → ${found}`);
+
+  const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
+  if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
+  return { resolvedUrl: found, filename, resp: null };  // caller must fetch resolvedUrl
+}
+
+// Fetch url as a blob (with HTML wrapper resolution and Referer injection).
+// Returns { blobUrl, filename } — blobUrl is a local blob:// so
+// chrome.downloads never makes a network request (anti-hotlinking safe).
+// Caller must call URL.revokeObjectURL(blobUrl) when done.
+async function fetchAsBlob(url, referer, filename) {
+  let { resolvedUrl, filename: fn, resp } = await resolveUrlIfHtml(url, referer, filename);
+  if (!resp) {
+    // Was an HTML wrapper — fetch the resolved URL with page URL as Referer
+    resp = await fetchWithReferer(resolvedUrl, currentTabUrl);
+  }
   const blob = await resp.blob();
-  return { blobUrl: URL.createObjectURL(blob), filename };
+  return { blobUrl: URL.createObjectURL(blob), filename: fn };
 }
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
@@ -628,9 +639,11 @@ downloadBtn.addEventListener('click', async () => {
               URL.revokeObjectURL(blobUrl);
               appendLog(`✅ ${filename}`);
             } else {
-              // video / pdf — direct download (too large to buffer as blob)
-              await chrome.downloads.download({ url: item.src, filename: item.filename });
-              appendLog(`✅ ${item.filename}`);
+              // video / pdf — too large to buffer as blob; resolve HTML wrapper then direct download
+              const { resolvedUrl, filename, resp } = await resolveUrlIfHtml(item.src, referer, item.filename);
+              resp?.body?.cancel(); // discard — we only needed Content-Type / HTML body
+              await chrome.downloads.download({ url: resolvedUrl, filename });
+              appendLog(`✅ ${filename}`);
             }
             done++;
           } catch (err) {
