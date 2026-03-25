@@ -317,7 +317,7 @@ const renderYoutubeFormatPicker = (formats) => {
 // ── Init ─────────────────────────────────────────────────────────
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || /^chrome(-extension)?:\/\//i.test(tab.url)) {
+  if (!tab || !tab.url || /^(chrome(-extension)?|moz-extension):\/\//i.test(tab.url)) {
     mainContent.style.display = 'none';
     unsupportedContent.style.display = 'block';
     return;
