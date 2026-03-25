@@ -566,21 +566,63 @@ downloadBtn.addEventListener('click', async () => {
       const hasVideos = selectedResources.some(r => r.type === 'video');
       if (!hasVideos) {
         let done = 0;
+        const canInjectReferer = !!chrome.declarativeNetRequest?.updateSessionRules;
+
+        // Add ALL Referer rules before triggering any downloads.
+        // chrome.downloads.download() returns immediately after queuing;
+        // the actual HTTP request fires asynchronously, so we must keep
+        // the rules alive until the requests are actually sent.
+        const batchRules = [];
+        if (canInjectReferer) {
+          const seenHostnames = new Set();
+          for (const item of selectedResources) {
+            const referer = item.referer || currentTabUrl;
+            if (!referer) continue;
+            try {
+              const hostname = new URL(item.src).hostname;
+              if (seenHostnames.has(hostname)) continue;
+              seenHostnames.add(hostname);
+              const ruleId = ++_ruleId;
+              batchRules.push({ ruleId, hostname, referer });
+            } catch (_) {}
+          }
+          if (batchRules.length) {
+            appendLog(`🔍 Adding ${batchRules.length} Referer rule(s)...`);
+            await chrome.declarativeNetRequest.updateSessionRules({
+              addRules: batchRules.map(r => ({
+                id: r.ruleId, priority: 1,
+                action: {
+                  type: 'modifyHeaders',
+                  requestHeaders: [{ header: 'Referer', operation: 'set', value: r.referer }]
+                },
+                condition: { urlFilter: `||${r.hostname}/` }
+              }))
+            });
+          }
+        }
+
+        // Trigger all downloads while rules are still active
         for (const item of selectedResources) {
-          const referer = item.referer || currentTabUrl;
           appendLog(`🔍 download: ${item.src}`);
-          appendLog(`🔍 referer:  ${referer || '(none)'}`);
           try {
-            await withReferer(item.src, referer, () =>
-              chrome.downloads.download({ url: item.src, filename: item.filename })
-            );
+            await chrome.downloads.download({ url: item.src, filename: item.filename });
             appendLog(`✅ ${item.filename}`);
             done++;
           } catch (err) {
             appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
           }
-          await new Promise(r => setTimeout(r, 300));
+          await new Promise(r => setTimeout(r, 200));
         }
+
+        // Wait for in-flight HTTP requests to be sent, then clean up rules
+        if (batchRules.length) {
+          await new Promise(r => setTimeout(r, 2000));
+          await chrome.declarativeNetRequest.updateSessionRules({
+            removeRuleIds: batchRules.map(r => r.ruleId)
+          });
+          appendLog(`🔍 Removed ${batchRules.length} Referer rule(s)`);
+        }
+
         appendLog(`🎉 Done! ${done}/${selectedResources.length} downloaded.`);
         setBtnState(false);
         return;
