@@ -176,7 +176,7 @@ const renderResourcePicker = (resources) => {
       const meta = document.createElement('div');
       meta.className   = 'ri-meta';
       meta.textContent = mediaType === 'image'
-        ? `${item.w} × ${item.h}`
+        ? (item.w > 0 ? `${item.w} × ${item.h}` : 'preload')
         : mediaType.toUpperCase();
 
       info.appendChild(name);

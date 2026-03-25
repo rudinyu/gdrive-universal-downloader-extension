@@ -63,6 +63,15 @@
         h: img.naturalHeight || img.height,
       }));
 
+    // Also collect images declared via <link rel="preload" as="image">
+    const seenSrcs = new Set(images.map(i => i.src));
+    const preloadImages = [...document.querySelectorAll('link[rel~="preload"][as="image"]')]
+      .map(link => link.href)
+      .filter(href => href && /^https?:\/\//i.test(href) && !seenSrcs.has(href))
+      .map(href => ({ type: 'image', src: href, alt: '', w: 0, h: 0 }));
+
+    const allImages = [...images, ...preloadImages];
+
     const videos = [...document.querySelectorAll('video')]
       .map(v => {
         const src = v.currentSrc || v.src ||
@@ -90,9 +99,9 @@
 
     const pdfs = [...new Map(pdfEmbeds.map(p => [p.src, p])).values()];
 
-    if (images.length > 0 || videos.length > 0 || pdfs.length > 0) {
+    if (allImages.length > 0 || videos.length > 0 || pdfs.length > 0) {
       type = 'universal';
-      GUD.universalResources = { images, videos, pdfs };
+      GUD.universalResources = { images: allImages, videos, pdfs };
     }
   }
 
