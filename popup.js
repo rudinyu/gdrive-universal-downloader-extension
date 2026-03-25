@@ -610,22 +610,28 @@ downloadBtn.addEventListener('click', async () => {
         return;
       }
 
-      // ── Fast path: images and PDFs only ───────────────────────────
-      // We fetch each resource ourselves (with Referer via declarativeNetRequest),
-      // detect HTML wrapper pages and resolve the real image URL inside them,
-      // then hand chrome.downloads a local blob:// URL — no network request,
-      // no anti-hotlinking, no timing race with rule removal.
-      const hasVideos = selectedResources.some(r => r.type === 'video');
-      if (!hasVideos) {
+      // ── Fast path: all universal resources (images, videos, PDFs) ──
+      // Use chrome.downloads from the popup to bypass cross-origin <a download>
+      // navigation (which is what downloader.js triggerDownload() hits for
+      // cross-origin URLs and causes the "navigates to webpage" symptom).
+      // Images: fetched as blob so we can detect HTML wrappers (no timing race).
+      // Videos/PDFs: direct chrome.downloads (too large to buffer as blob).
+      {
         let done = 0;
         for (const item of selectedResources) {
           appendLog(`🔍 download: ${item.src}`);
           const referer = item.referer || currentTabUrl;
           try {
-            const { blobUrl, filename } = await fetchAsBlob(item.src, referer, item.filename);
-            await chrome.downloads.download({ url: blobUrl, filename });
-            URL.revokeObjectURL(blobUrl);
-            appendLog(`✅ ${filename}`);
+            if (item.type === 'image') {
+              const { blobUrl, filename } = await fetchAsBlob(item.src, referer, item.filename);
+              await chrome.downloads.download({ url: blobUrl, filename });
+              URL.revokeObjectURL(blobUrl);
+              appendLog(`✅ ${filename}`);
+            } else {
+              // video / pdf — direct download (too large to buffer as blob)
+              await chrome.downloads.download({ url: item.src, filename: item.filename });
+              appendLog(`✅ ${item.filename}`);
+            }
             done++;
           } catch (err) {
             appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
