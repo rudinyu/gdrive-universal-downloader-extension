@@ -698,12 +698,32 @@ downloadBtn.addEventListener('click', async () => {
           const referer = item.referer || currentTabUrl;
           try {
             if (item.type === 'image') {
+              // Images may be HTML wrappers (preload CDNs) — resolve in page context then blob
               const { blobUrl, filename } = await fetchImageAsBlobUrl(item.src, item.filename);
               await chrome.downloads.download({ url: blobUrl, filename });
               URL.revokeObjectURL(blobUrl);
               appendLog(`✅ ${filename}`);
+            } else if (item.type === 'video') {
+              // Videos come from <video currentSrc> — always real URLs (browser is playing them).
+              // Skip resolution; download directly via chrome.downloads which uses the browser's
+              // download manager (sends cookies, same network stack as browser).
+              // Set Referer via DNR rule and keep it alive long enough for the HTTP request to go out.
+              const ruleId = (referer && chrome.declarativeNetRequest?.updateSessionRules) ? ++_ruleId : null;
+              if (ruleId) {
+                const hostname = new URL(item.src).hostname;
+                await chrome.declarativeNetRequest.updateSessionRules({
+                  addRules: [{ id: ruleId, priority: 1,
+                    action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }] },
+                    condition: { urlFilter: `||${hostname}/` }
+                  }]
+                });
+              }
+              await chrome.downloads.download({ url: item.src, filename: item.filename });
+              await new Promise(r => setTimeout(r, 3000));
+              if (ruleId) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+              appendLog(`✅ ${item.filename}`);
             } else {
-              // video / pdf — too large to buffer; resolve HTML wrapper then direct download
+              // pdf — resolve HTML wrappers if present, then direct download
               const { resolvedUrl, filename } = await resolveUrlFallback(item.src, item.filename);
               await chrome.downloads.download({ url: resolvedUrl, filename });
               appendLog(`✅ ${filename}`);
