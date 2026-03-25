@@ -1,4 +1,4 @@
-# GDrive Universal Downloader — Chrome Extension
+# GDrive Universal Downloader — Chrome & Firefox Extension
 
 [English](#english) | [中文](#中文)
 
@@ -6,12 +6,13 @@
 
 ## English
 
-A Chrome Extension that auto-detects downloadable content on **any webpage** and downloads it with one click — no Console needed.
+A Chrome & Firefox Extension that auto-detects downloadable content on **any webpage** and downloads it with one click — no Console needed.
 
 > ⚠️ **Legal Notice**: This extension is intended only for files you own or have been authorized to access. Please comply with copyright laws and Google's Terms of Service.
 
 ### ✨ Features
 
+- **Chrome & Firefox support** — works on both browsers (Firefox 128+, Chrome MV3)
 - **Universal downloader** — works on any webpage, not just Google Drive and YouTube
 - **Resource picker** — scans the page and shows a selectable list of images, videos, and PDFs with checkboxes
 - **YouTube quality picker** — choose resolution (Auto / 360p / 480p / 720p / 1080p / …) before recording; the player switches to the selected quality so MediaRecorder captures it with full audio
@@ -40,7 +41,7 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 
 ### 🚀 Installation
 
-#### Method 1 — Load Unpacked (Development)
+#### Chrome — Load Unpacked (Development)
 
 1. Download or clone this repository
 2. Open Chrome and go to `chrome://extensions/`
@@ -48,11 +49,31 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 4. Click **"Load unpacked"** and select the project folder
 5. The extension icon appears in your toolbar
 
-#### Method 2 — From Release ZIP
+#### Chrome — From Release ZIP
 
-1. Download the latest `.zip` from [Releases](../../releases)
+1. Download `chrome.zip` from [Releases](../../releases)
 2. Unzip it
 3. Follow steps 2–5 above
+
+#### Firefox — Load Temporary Add-on (Development)
+
+> Requires Firefox 128 or later.
+
+1. Download or clone this repository
+2. Open Firefox and go to `about:debugging`
+3. Click **"This Firefox"** in the left sidebar
+4. Click **"Load Temporary Add-on…"**
+5. Navigate to the project folder and select **`manifest_firefox.json`**
+6. The extension icon appears in your toolbar
+
+> **Note:** Temporary add-ons are removed when Firefox restarts. For a persistent install, the extension must be signed via [Firefox AMO](https://addons.mozilla.org/).
+
+#### Firefox — From Release ZIP
+
+1. Download `firefox.zip` from [Releases](../../releases)
+2. Unzip it
+3. In Firefox go to `about:debugging` → **"This Firefox"** → **"Load Temporary Add-on…"**
+4. Select the `manifest.json` inside the unzipped folder
 
 ### 🎯 Usage
 
@@ -103,14 +124,16 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 ### 🗂️ Project Structure
 
 ```
-├── manifest.json        # Extension manifest (MV3)
-├── content-hooks.js     # XHR/fetch hooks injected at document_start
-├── detect.js            # Page type + resource detection
-├── downloader.js        # Main download logic (injected on demand)
-├── popup.html           # Extension popup UI
-├── popup.js             # Popup logic + log polling
+├── manifest.json          # Chrome extension manifest (MV3)
+├── manifest_firefox.json  # Firefox extension manifest (MV3, gecko settings)
+├── build.sh               # Packages chrome.zip and firefox.zip
+├── content-hooks.js       # XHR/fetch hooks injected at document_start
+├── detect.js              # Page type + resource detection
+├── downloader.js          # Main download logic (injected on demand)
+├── popup.html             # Extension popup UI
+├── popup.js               # Popup logic + log polling
 ├── lib/
-│   └── jspdf.umd.min.js # Bundled jsPDF (no remote dependency)
+│   └── jspdf.umd.min.js   # Bundled jsPDF (no remote dependency)
 └── icons/
     ├── icon16.png
     ├── icon48.png
@@ -141,12 +164,13 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 
 ## 中文
 
-一個 Chrome Extension，可在**任意網頁**自動偵測可下載的內容，一鍵下載，完全不需要開啟開發者 Console。
+一個 Chrome & Firefox Extension，可在**任意網頁**自動偵測可下載的內容，一鍵下載，完全不需要開啟開發者 Console。
 
 > ⚠️ **合法使用提醒**：本擴充功能僅供用於您本人擁有或已獲授權存取的文件。請遵守著作權及 Google 服務條款。
 
 ### ✨ 功能特色
 
+- **支援 Chrome & Firefox** — 同時支援兩種瀏覽器（Firefox 128+、Chrome MV3）
 - **通用下載器** — 不限 Google Drive 和 YouTube，任意網頁均可使用
 - **資源選擇器** — 掃描頁面並顯示可勾選的圖片、影片、PDF 清單
 - **YouTube 畫質選擇器** — 可選擇解析度（Auto / 360p / 480p / 720p / 1080p / …）再錄製；播放器會切換到指定畫質，MediaRecorder 錄到的影片有完整聲音
@@ -175,7 +199,7 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 
 ### 🚀 安裝方式
 
-#### 方式一 — 載入未封裝項目（開發者模式）
+#### Chrome — 載入未封裝項目（開發者模式）
 
 1. 下載或 clone 此 repository
 2. 開啟 Chrome，網址列輸入 `chrome://extensions/`
@@ -183,11 +207,31 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 4. 點「**載入未封裝項目**」→ 選擇專案資料夾
 5. 擴充功能圖示出現在工具列中
 
-#### 方式二 — 從 Release ZIP 安裝
+#### Chrome — 從 Release ZIP 安裝
 
-1. 從 [Releases](../../releases) 下載最新 `.zip`
+1. 從 [Releases](../../releases) 下載 `chrome.zip`
 2. 解壓縮
 3. 依照上方步驟 2–5 操作
+
+#### Firefox — 載入暫時性附加元件（開發者模式）
+
+> 需要 Firefox 128 或以上版本。
+
+1. 下載或 clone 此 repository
+2. 開啟 Firefox，網址列輸入 `about:debugging`
+3. 點左側「**此 Firefox**」
+4. 點「**載入暫時性附加元件…**」
+5. 進入專案資料夾，選擇 **`manifest_firefox.json`**
+6. 擴充功能圖示出現在工具列中
+
+> **注意：** 暫時性附加元件在 Firefox 重新啟動後會消失。若需要永久安裝，需透過 [Firefox AMO](https://addons.mozilla.org/) 簽署。
+
+#### Firefox — 從 Release ZIP 安裝
+
+1. 從 [Releases](../../releases) 下載 `firefox.zip`
+2. 解壓縮
+3. Firefox 開啟 `about:debugging` → **「此 Firefox」** → **「載入暫時性附加元件…」**
+4. 選擇解壓縮資料夾內的 `manifest.json`
 
 ### 🎯 使用方式
 
@@ -238,14 +282,16 @@ A Chrome Extension that auto-detects downloadable content on **any webpage** and
 ### 🗂️ 專案結構
 
 ```
-├── manifest.json        # Extension manifest (MV3)
-├── content-hooks.js     # 於 document_start 注入的 XHR/fetch 攔截器
-├── detect.js            # 頁面類型與資源偵測
-├── downloader.js        # 主要下載邏輯（按需注入）
-├── popup.html           # Popup UI
-├── popup.js             # Popup 邏輯 + Log polling
+├── manifest.json          # Chrome Extension manifest (MV3)
+├── manifest_firefox.json  # Firefox Extension manifest (MV3，含 gecko 設定)
+├── build.sh               # 打包 chrome.zip 與 firefox.zip
+├── content-hooks.js       # 於 document_start 注入的 XHR/fetch 攔截器
+├── detect.js              # 頁面類型與資源偵測
+├── downloader.js          # 主要下載邏輯（按需注入）
+├── popup.html             # Popup UI
+├── popup.js               # Popup 邏輯 + Log polling
 ├── lib/
-│   └── jspdf.umd.min.js # 本地打包的 jsPDF（無遠端依賴）
+│   └── jspdf.umd.min.js   # 本地打包的 jsPDF（無遠端依賴）
 └── icons/
     ├── icon16.png
     ├── icon48.png
