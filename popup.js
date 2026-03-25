@@ -41,6 +41,7 @@ const mainContent        = document.getElementById('mainContent');
 const unsupportedContent = document.getElementById('unsupportedContent');
 
 let currentTabId          = null;
+let currentTabUrl         = null;
 let currentType           = 'unknown';
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
@@ -136,6 +137,29 @@ const updateResourceCount = () => {
   resourceCount.textContent = `${checked} / ${items.length} selected`;
 };
 
+// Fetch preload-hint URLs that look like images but actually return HTML
+// wrapper pages (e.g. manga readers). Parses the HTML, finds the real
+// <img src="..."> and returns updated resource entries with the actual
+// image URL and the preload URL stored as `referer`.
+const resolvePreloadImages = async (images) => {
+  return Promise.all(images.map(async (img) => {
+    if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
+    try {
+      const resp = await fetch(img.src);
+      const ct   = resp.headers.get('content-type') || '';
+      if (!ct.includes('text/html')) return img;
+      const doc   = new DOMParser().parseFromString(await resp.text(), 'text/html');
+      const found = [...doc.querySelectorAll('img[src]')]
+        .map(el => new URL(el.getAttribute('src'), resp.url).href)
+        .find(src => /^https?:\/\//i.test(src));
+      if (!found) return img;
+      return { ...img, src: found, referer: img.src };
+    } catch {
+      return img;
+    }
+  }));
+};
+
 const renderResourcePicker = (resources) => {
   resourcePicker.style.display = 'block';
   resourceList.innerHTML = '';
@@ -156,6 +180,7 @@ const renderResourcePicker = (resources) => {
       div.dataset.src      = item.src;
       div.dataset.type     = mediaType;
       div.dataset.filename = filename;
+      div.dataset.referer  = item.referer || '';
 
       const cb = document.createElement('input');
       cb.type    = 'checkbox';
@@ -322,7 +347,8 @@ async function init() {
     unsupportedContent.style.display = 'block';
     return;
   }
-  currentTabId = tab.id;
+  currentTabId  = tab.id;
+  currentTabUrl = tab.url;
 
   try {
     await chrome.scripting.executeScript({
@@ -401,6 +427,9 @@ async function init() {
     if (currentType === 'video' && youtubeFormats !== null) {
       renderYoutubeFormatPicker(youtubeFormats);
     } else if (currentType === 'universal' && resources) {
+      if (resources.images?.length) {
+        resources.images = await resolvePreloadImages(resources.images);
+      }
       renderResourcePicker(resources);
       // download button enabled/disabled controlled by updateResourceCount()
     } else if (currentType !== 'unknown') {
@@ -472,6 +501,7 @@ downloadBtn.addEventListener('click', async () => {
             type:     div.dataset.type,
             src:      div.dataset.src,
             filename: div.dataset.filename,
+            referer:  div.dataset.referer || '',
           });
         }
       });
@@ -492,7 +522,12 @@ downloadBtn.addEventListener('click', async () => {
         let done = 0;
         for (const item of selectedResources) {
           try {
-            await chrome.downloads.download({ url: item.src, filename: item.filename });
+            const dlOptions = { url: item.src, filename: item.filename };
+            // Use the resolved preload URL as Referer (for anti-hotlinking CDNs),
+            // falling back to the current tab URL for regular images.
+            const referer = item.referer || currentTabUrl;
+            if (referer) dlOptions.headers = [{ name: 'Referer', value: referer }];
+            await chrome.downloads.download(dlOptions);
             appendLog(`✅ ${item.filename}`);
             done++;
           } catch (err) {
