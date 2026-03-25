@@ -141,18 +141,68 @@ async function fetchImageAsBlobUrl(url, filename) {
   return { blobUrl: URL.createObjectURL(blob), filename: r.filename };
 }
 
-// Resolve url in page context (HTML wrapper detection only, no buffering).
-// Used for large files (video/PDF) where we only need the real URL.
-async function resolveUrlInPage(url, filename) {
-  appendLog(`🔍 resolving in page context: ${url}`);
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: currentTabId }, world: 'MAIN',
-    func: _pageResolveFunc, args: [url, filename, false],
-  });
-  const r = results?.[0]?.result;
-  if (!r || r.error) throw new Error(r?.error || 'Page resolve failed');
-  appendLog(`🔍 content-type: ${r.contentType} | resolved: ${r.resolvedUrl}`);
-  return { resolvedUrl: r.resolvedUrl, filename: r.filename };
+// Resolve url to the real media URL with HTML wrapper detection.
+// Strategy:
+//   1. Page context (world:MAIN) — has browser cookies/Referer → passes Cloudflare,
+//      but may fail with CORS if the CDN has no Access-Control-Allow-Origin header.
+//   2. Popup context fallback — has host_permissions CORS bypass, may be blocked
+//      by Cloudflare but succeeds if the URL doesn't have bot protection.
+// If neither resolves the URL, returns the original URL unchanged (best-effort).
+async function resolveUrlFallback(url, filename) {
+  appendLog(`🔍 resolving: ${url}`);
+
+  // ── 1. Page context ──────────────────────────────────────────────
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId }, world: 'MAIN',
+      func: _pageResolveFunc, args: [url, filename, false],
+    });
+    const r = results?.[0]?.result;
+    if (r && !r.error) {
+      appendLog(`🔍 content-type: ${r.contentType}`);
+      if (r.resolvedUrl !== url) appendLog(`✓ resolved → ${r.resolvedUrl}`);
+      return { resolvedUrl: r.resolvedUrl, filename: r.filename };
+    }
+    appendLog(`🔍 page context: ${r?.error} — trying popup context`);
+  } catch (e) {
+    appendLog(`🔍 page context error: ${e.message} — trying popup context`);
+  }
+
+  // ── 2. Popup context (CORS bypass via host_permissions) ──────────
+  let resp;
+  try {
+    resp = await withReferer(url, currentTabUrl, () => fetch(url));
+  } catch (e) {
+    appendLog(`⚠️ popup context also failed: ${e.message} — using original URL`);
+    return { resolvedUrl: url, filename };
+  }
+
+  const ct = resp.headers.get('content-type') || '';
+  appendLog(`🔍 content-type (popup): ${ct}`);
+
+  if (!ct.includes('text/html')) {
+    resp.body?.cancel();
+    return { resolvedUrl: url, filename };
+  }
+
+  const text = await resp.text();
+  const doc  = new DOMParser().parseFromString(text, 'text/html');
+  // Exclude resources from the same host as the wrapper (bot-block pages embed
+  // resources like logos from their own CDN — those are not the real media URL).
+  const srcHost = new URL(url).hostname;
+  const found = [...doc.querySelectorAll('video[src], source[src], img[src]')]
+    .map(el => { try { return new URL(el.getAttribute('src'), resp.url).href; } catch { return null; } })
+    .find(src => src && /^https?:\/\//i.test(src) && new URL(src).hostname !== srcHost);
+
+  if (!found) {
+    appendLog(`⚠️ HTML page found but no real media URL inside — using original`);
+    return { resolvedUrl: url, filename };
+  }
+
+  appendLog(`✓ resolved (popup) → ${found}`);
+  const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
+  if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
+  return { resolvedUrl: found, filename };
 }
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
@@ -654,7 +704,7 @@ downloadBtn.addEventListener('click', async () => {
               appendLog(`✅ ${filename}`);
             } else {
               // video / pdf — too large to buffer; resolve HTML wrapper then direct download
-              const { resolvedUrl, filename } = await resolveUrlInPage(item.src, item.filename);
+              const { resolvedUrl, filename } = await resolveUrlFallback(item.src, item.filename);
               await chrome.downloads.download({ url: resolvedUrl, filename });
               appendLog(`✅ ${filename}`);
             }
