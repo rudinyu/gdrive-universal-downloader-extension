@@ -78,6 +78,57 @@ async function withReferer(targetUrl, referer, fn) {
     appendLog(`🔍 rule ${ruleId} removed`);
   }
 }
+
+// Fetch a URL with an optional Referer header (via declarativeNetRequest).
+// If the response is an HTML wrapper page, parse it to find the real <img src>
+// and fetch that instead (using the page URL as Referer).
+// Returns { blobUrl, filename } — blobUrl is a local blob:// URL, so
+// chrome.downloads.download() never makes a network request and anti-hotlinking
+// cannot interfere.  Caller must call URL.revokeObjectURL(blobUrl) when done.
+async function fetchAsBlob(url, referer, filename) {
+  const fetchOne = async (targetUrl, ref) => {
+    const ruleId = (ref && chrome.declarativeNetRequest?.updateSessionRules) ? ++_ruleId : null;
+    if (ruleId) {
+      const hostname = new URL(targetUrl).hostname;
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{ id: ruleId, priority: 1,
+          action: { type: 'modifyHeaders', requestHeaders: [{ header: 'Referer', operation: 'set', value: ref }] },
+          condition: { urlFilter: `||${hostname}/` }
+        }]
+      });
+    }
+    try {
+      // fetch() is awaited here — rule is active for the full request lifecycle
+      return await fetch(targetUrl);
+    } finally {
+      if (ruleId) await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+    }
+  };
+
+  let resp = await fetchOne(url, referer);
+  const ct = resp.headers.get('content-type') || '';
+  appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
+
+  if (ct.includes('text/html')) {
+    // HTML wrapper — parse to find real image URL
+    appendLog(`🔍 HTML wrapper detected — parsing for real image`);
+    const text = await resp.text();
+    const doc  = new DOMParser().parseFromString(text, 'text/html');
+    const found = [...doc.querySelectorAll('img[src]')]
+      .map(el => new URL(el.getAttribute('src'), resp.url).href)
+      .find(src => /^https?:\/\//i.test(src));
+    if (!found) throw new Error('HTML wrapper: no <img src> found inside');
+    appendLog(`✓ resolved → ${found}`);
+    // Fetch the real image; CDN expects the page URL as Referer, not the wrapper URL
+    resp = await fetchOne(found, currentTabUrl);
+    // Derive filename from the resolved URL
+    const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
+    if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
+  }
+
+  const blob = await resp.blob();
+  return { blobUrl: URL.createObjectURL(blob), filename };
+}
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
 // | { type:'direct', url, qualityLabel, mimeType, sizeMB }
@@ -560,69 +611,27 @@ downloadBtn.addEventListener('click', async () => {
       }
 
       // ── Fast path: images and PDFs only ───────────────────────────
-      // chrome.downloads.download() bypasses CORS entirely — no content
-      // script needed. Cross-origin <a download> silently navigates
-      // instead of downloading, so we never use that path for images.
+      // We fetch each resource ourselves (with Referer via declarativeNetRequest),
+      // detect HTML wrapper pages and resolve the real image URL inside them,
+      // then hand chrome.downloads a local blob:// URL — no network request,
+      // no anti-hotlinking, no timing race with rule removal.
       const hasVideos = selectedResources.some(r => r.type === 'video');
       if (!hasVideos) {
         let done = 0;
-        const canInjectReferer = !!chrome.declarativeNetRequest?.updateSessionRules;
-
-        // Add ALL Referer rules before triggering any downloads.
-        // chrome.downloads.download() returns immediately after queuing;
-        // the actual HTTP request fires asynchronously, so we must keep
-        // the rules alive until the requests are actually sent.
-        const batchRules = [];
-        if (canInjectReferer) {
-          const seenHostnames = new Set();
-          for (const item of selectedResources) {
-            const referer = item.referer || currentTabUrl;
-            if (!referer) continue;
-            try {
-              const hostname = new URL(item.src).hostname;
-              if (seenHostnames.has(hostname)) continue;
-              seenHostnames.add(hostname);
-              const ruleId = ++_ruleId;
-              batchRules.push({ ruleId, hostname, referer });
-            } catch (_) {}
-          }
-          if (batchRules.length) {
-            appendLog(`🔍 Adding ${batchRules.length} Referer rule(s)...`);
-            await chrome.declarativeNetRequest.updateSessionRules({
-              addRules: batchRules.map(r => ({
-                id: r.ruleId, priority: 1,
-                action: {
-                  type: 'modifyHeaders',
-                  requestHeaders: [{ header: 'Referer', operation: 'set', value: r.referer }]
-                },
-                condition: { urlFilter: `||${r.hostname}/` }
-              }))
-            });
-          }
-        }
-
-        // Trigger all downloads while rules are still active
         for (const item of selectedResources) {
           appendLog(`🔍 download: ${item.src}`);
+          const referer = item.referer || currentTabUrl;
           try {
-            await chrome.downloads.download({ url: item.src, filename: item.filename });
-            appendLog(`✅ ${item.filename}`);
+            const { blobUrl, filename } = await fetchAsBlob(item.src, referer, item.filename);
+            await chrome.downloads.download({ url: blobUrl, filename });
+            URL.revokeObjectURL(blobUrl);
+            appendLog(`✅ ${filename}`);
             done++;
           } catch (err) {
             appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
           }
           await new Promise(r => setTimeout(r, 200));
         }
-
-        // Wait for in-flight HTTP requests to be sent, then clean up rules
-        if (batchRules.length) {
-          await new Promise(r => setTimeout(r, 2000));
-          await chrome.declarativeNetRequest.updateSessionRules({
-            removeRuleIds: batchRules.map(r => r.ruleId)
-          });
-          appendLog(`🔍 Removed ${batchRules.length} Referer rule(s)`);
-        }
-
         appendLog(`🎉 Done! ${done}/${selectedResources.length} downloaded.`);
         setBtnState(false);
         return;
