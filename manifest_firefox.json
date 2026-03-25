@@ -12,7 +12,7 @@
     "extension_pages": "script-src 'self'; object-src 'self';"
   },
   "description": "Download images, PDFs, and videos from any webpage, plus Google Drive and YouTube.",
-  "permissions": ["activeTab", "scripting", "downloads"],
+  "permissions": ["activeTab", "scripting", "downloads", "declarativeNetRequest"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",

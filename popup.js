@@ -43,6 +43,41 @@ const unsupportedContent = document.getElementById('unsupportedContent');
 let currentTabId          = null;
 let currentTabUrl         = null;
 let currentType           = 'unknown';
+let _ruleId               = 1000;
+
+// Temporarily add a declarativeNetRequest session rule that sets the
+// Referer header for all requests to targetUrl's hostname, run fn(),
+// then remove the rule.  Works for both fetch() and chrome.downloads.
+// (chrome.downloads.download() rejects 'Referer' in its own headers
+//  array; this bypasses that restriction at the network layer.)
+async function withReferer(targetUrl, referer, fn) {
+  if (!referer || !chrome.declarativeNetRequest?.updateSessionRules) {
+    appendLog(`🔍 withReferer: no API or no referer — skipping rule`);
+    return fn();
+  }
+  const ruleId  = ++_ruleId;
+  const hostname = new URL(targetUrl).hostname;
+  appendLog(`🔍 declarativeNetRequest: set Referer="${referer}" for ||${hostname}/  (rule ${ruleId})`);
+  try {
+    await chrome.declarativeNetRequest.updateSessionRules({
+      addRules: [{
+        id: ruleId, priority: 1,
+        action: {
+          type: 'modifyHeaders',
+          requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }]
+        },
+        condition: { urlFilter: `||${hostname}/` }
+      }]
+    });
+    return await fn();
+  } catch (e) {
+    appendLog(`⚠️ withReferer error: ${e?.message || String(e)}`);
+    throw e;
+  } finally {
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+    appendLog(`🔍 rule ${ruleId} removed`);
+  }
+}
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
 // | { type:'direct', url, qualityLabel, mimeType, sizeMB }
@@ -146,7 +181,7 @@ const resolvePreloadImages = async (images) => {
     if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
     appendLog(`🔍 resolving preload: ${img.src}`);
     try {
-      const resp = await fetch(img.src);
+      const resp = await withReferer(img.src, currentTabUrl, () => fetch(img.src));
       const ct   = resp.headers.get('content-type') || '';
       appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
       if (!ct.includes('text/html')) {
@@ -533,26 +568,16 @@ downloadBtn.addEventListener('click', async () => {
         let done = 0;
         for (const item of selectedResources) {
           const referer = item.referer || currentTabUrl;
-          appendLog(`🔍 url: ${item.src}`);
-          appendLog(`🔍 referer: ${referer || '(none)'}`);
+          appendLog(`🔍 download: ${item.src}`);
+          appendLog(`🔍 referer:  ${referer || '(none)'}`);
           try {
-            const dlOptions = { url: item.src, filename: item.filename };
-            if (referer) dlOptions.headers = [{ name: 'Referer', value: referer }];
-            appendLog(`🔍 dlOptions: ${JSON.stringify(dlOptions)}`);
-            await chrome.downloads.download(dlOptions);
+            await withReferer(item.src, referer, () =>
+              chrome.downloads.download({ url: item.src, filename: item.filename })
+            );
             appendLog(`✅ ${item.filename}`);
             done++;
           } catch (err) {
-            appendLog(`⚠️ header attempt failed: ${err?.message || String(err)}`);
-            // Referer is a restricted header in chrome.downloads — retry without it
-            try {
-              appendLog(`🔍 retrying without custom headers...`);
-              await chrome.downloads.download({ url: item.src, filename: item.filename });
-              appendLog(`✅ ${item.filename} (no custom header)`);
-              done++;
-            } catch (err2) {
-              appendLog(`❌ ${item.filename}: ${err2?.message || String(err2)}`);
-            }
+            appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
           }
           await new Promise(r => setTimeout(r, 300));
         }
