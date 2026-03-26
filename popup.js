@@ -44,6 +44,44 @@ let currentTabId          = null;
 let currentTabUrl         = null;
 let currentType           = 'unknown';
 let _ruleId               = 1000;
+const FALLBACK_FILENAME   = 'download.bin';
+const extensionInitiatorDomains =
+  typeof chrome.runtime?.id === 'string' ? [chrome.runtime.id] : null;
+
+const getSafeReferer = (value) => {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.origin + '/';
+  } catch {
+    return null;
+  }
+};
+
+const sanitizeFilename = (name, fallback = FALLBACK_FILENAME) => {
+  const raw = (name ?? '').toString();
+  let basename = raw.split(/[/\\]/).pop() || '';
+  basename = basename
+    .replace(/[\u0000-\u001f]/g, '')
+    .replace(/[<>:"|?*\u007f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  if (!basename) {
+    if (!fallback || fallback === raw) return FALLBACK_FILENAME;
+    return sanitizeFilename(fallback, FALLBACK_FILENAME);
+  }
+  if (basename.length > 180) {
+    const extMatch = basename.match(/(\.[a-z0-9]{2,5})$/i);
+    if (extMatch) {
+      const keep = Math.max(1, 180 - extMatch[1].length);
+      basename = basename.slice(0, keep).replace(/\.+$/, '') + extMatch[1];
+    } else {
+      basename = basename.slice(0, 180);
+    }
+  }
+  return basename;
+};
 
 // Temporarily add a declarativeNetRequest session rule that sets the
 // Referer header for all requests to targetUrl's hostname, run fn(),
@@ -51,22 +89,37 @@ let _ruleId               = 1000;
 // (chrome.downloads.download() rejects 'Referer' in its own headers
 //  array; this bypasses that restriction at the network layer.)
 async function withReferer(targetUrl, referer, fn) {
-  if (!referer || !chrome.declarativeNetRequest?.updateSessionRules) {
-    appendLog(`🔍 withReferer: no API or no referer — skipping rule`);
+  const safeReferer = getSafeReferer(referer);
+  if (!safeReferer || !chrome.declarativeNetRequest?.updateSessionRules) {
+    appendLog(`🔍 withReferer: missing API or safe referer — skipping rule`);
+    return fn();
+  }
+  let hostname;
+  let parsedTarget;
+  try {
+    parsedTarget = new URL(targetUrl);
+    if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') {
+      appendLog(`🔍 withReferer: non-HTTP target — skipping rule`);
+      return fn();
+    }
+    hostname = parsedTarget.hostname;
+  } catch {
+    appendLog(`🔍 withReferer: invalid target URL — skipping rule`);
     return fn();
   }
   const ruleId  = ++_ruleId;
-  const hostname = new URL(targetUrl).hostname;
-  appendLog(`🔍 declarativeNetRequest: set Referer="${referer}" for ||${hostname}/  (rule ${ruleId})`);
+  const condition = { urlFilter: `||${hostname}/` };
+  if (extensionInitiatorDomains) condition.initiatorDomains = extensionInitiatorDomains;
+  appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
       addRules: [{
         id: ruleId, priority: 1,
         action: {
           type: 'modifyHeaders',
-          requestHeaders: [{ header: 'Referer', operation: 'set', value: referer }]
+          requestHeaders: [{ header: 'Referer', operation: 'set', value: safeReferer }]
         },
-        condition: { urlFilter: `||${hostname}/` }
+        condition
       }]
     });
     return await fn();
@@ -103,11 +156,13 @@ async function fetchAsBlob(url, referer, filename) {
     appendLog(`✓ resolved → ${found}`);
     resp = await fetchOne(found, currentTabUrl);
     const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
-    if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
+    if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) {
+      filename = sanitizeFilename(realName, filename);
+    }
   }
 
   const blob = await resp.blob();
-  return { blobUrl: URL.createObjectURL(blob), filename };
+  return { blobUrl: URL.createObjectURL(blob), filename: sanitizeFilename(filename) };
 }
 
 // Shared inner logic for resolveUrlFallback (serialised, runs in world:MAIN).
@@ -139,6 +194,7 @@ const _pageResolveFunc = async (targetUrl, origFilename) => {
 // If neither resolves the URL, returns the original URL unchanged (best-effort).
 async function resolveUrlFallback(url, filename) {
   appendLog(`🔍 resolving: ${url}`);
+  const fallbackName = sanitizeFilename(filename);
 
   // ── 1. Page context ──────────────────────────────────────────────
   try {
@@ -150,7 +206,10 @@ async function resolveUrlFallback(url, filename) {
     if (r && !r.error) {
       appendLog(`🔍 content-type: ${r.contentType}`);
       if (r.resolvedUrl !== url) appendLog(`✓ resolved → ${r.resolvedUrl}`);
-      return { resolvedUrl: r.resolvedUrl, filename: r.filename };
+      return {
+        resolvedUrl: r.resolvedUrl,
+        filename: sanitizeFilename(r.filename, fallbackName)
+      };
     }
     appendLog(`🔍 page context: ${r?.error} — trying popup context`);
   } catch (e) {
@@ -163,7 +222,7 @@ async function resolveUrlFallback(url, filename) {
     resp = await withReferer(url, currentTabUrl, () => fetch(url));
   } catch (e) {
     appendLog(`⚠️ popup context also failed: ${e.message} — using original URL`);
-    return { resolvedUrl: url, filename };
+    return { resolvedUrl: url, filename: fallbackName };
   }
 
   const ct = resp.headers.get('content-type') || '';
@@ -171,7 +230,7 @@ async function resolveUrlFallback(url, filename) {
 
   if (!ct.includes('text/html')) {
     resp.body?.cancel();
-    return { resolvedUrl: url, filename };
+    return { resolvedUrl: url, filename: fallbackName };
   }
 
   const text = await resp.text();
@@ -185,13 +244,15 @@ async function resolveUrlFallback(url, filename) {
 
   if (!found) {
     appendLog(`⚠️ HTML page found but no real media URL inside — using original`);
-    return { resolvedUrl: url, filename };
+    return { resolvedUrl: url, filename: fallbackName };
   }
 
   appendLog(`✓ resolved (popup) → ${found}`);
   const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
-  if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) filename = realName;
-  return { resolvedUrl: found, filename };
+  const finalName = realName && /\.[a-z0-9]{2,5}$/i.test(realName)
+    ? sanitizeFilename(realName, fallbackName)
+    : fallbackName;
+  return { resolvedUrl: found, filename: finalName };
 }
 let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
@@ -270,13 +331,13 @@ const startPolling = (tabId) => {
 
 // ── Universal resource picker ────────────────────────────────────
 const getFilenameFromUrl = (src, mediaType, index) => {
+  const fallback = `${mediaType}-${index + 1}.${{ image: 'jpg', video: 'mp4', pdf: 'pdf' }[mediaType] || 'bin'}`;
   try {
     const parts = new URL(src).pathname.split('/');
     const name  = decodeURIComponent(parts[parts.length - 1] || '');
-    if (name && /\.[a-z0-9]{2,5}$/i.test(name)) return name;
+    if (name && /\.[a-z0-9]{2,5}$/i.test(name)) return sanitizeFilename(name, fallback);
   } catch (e) { /* ignore */ }
-  const exts = { image: 'jpg', video: 'mp4', pdf: 'pdf' };
-  return `${mediaType}-${index + 1}.${exts[mediaType] || 'bin'}`;
+  return sanitizeFilename(fallback);
 };
 
 const updateResourceCount = () => {
@@ -666,8 +727,13 @@ downloadBtn.addEventListener('click', async () => {
           });
         }
       });
-      // Drop any items with non-http(s) URLs (security: block javascript:, data:, etc.)
-      selectedResources = selectedResources.filter(item => /^https?:\/\//i.test(item.src));
+      // Drop any items whose URL is not a valid, parseable http/https URL.
+      // new URL() is safer than a regex — it normalises encoded schemes and
+      // rejects javascript:, data:, file:, etc. reliably.
+      selectedResources = selectedResources.filter(item => {
+        try { const u = new URL(item.src); return u.protocol === 'http:' || u.protocol === 'https:'; }
+        catch { return false; }
+      });
       if (selectedResources.length === 0) {
         appendLog('⚠️ No items selected.');
         setBtnState(false);
