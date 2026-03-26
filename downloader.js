@@ -1,11 +1,11 @@
-// GDrive Universal Downloader v3.6.4 — Injected Logic
+// GDrive Universal Downloader v3.7.0 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
   // Marker so popup can verify the IIFE actually executed
   window.__gudRunMarker = Date.now();
 
-  const VERSION = '3.6.4';
+  const VERSION = '3.7.0';
   const CONFIG = {
     DEFAULT_SCALE: 1.0,
     DEFAULT_QUALITY: 0.82,
@@ -98,7 +98,10 @@
     return raw
       .replace(/\s*[-–—]\s*Google.*/i, '')
       .replace(/\.(pdf|docx?|xlsx?|pptx?|csv|svg|txt|mp[34]|webm|jpe?g|png|gif|zip|rar)$/i, '')
-      .trim() || 'gdrive-file';
+      .trim()
+      .replace(/\.\./g, '_')   // prevent directory traversal
+      .replace(/^\./,   '_')   // prevent hidden-file names
+      || 'gdrive-file';
   };
 
   const triggerDownload = (url, filename) => {
@@ -323,12 +326,22 @@
 
     // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
     // Keep the timer running until the body is fully received, not just until headers arrive.
+    const MAX_BLOB_BYTES = 100 * 1024 * 1024; // 100 MB — prevent memory exhaustion
     const fetchBlob = (src, ms = 8000) => {
       const ctrl  = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), ms);
       return fetch(src, { signal: ctrl.signal })
-        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
-        .then(blob => { clearTimeout(timer); return blob; })
+        .then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const len = parseInt(r.headers.get('content-length') || '0', 10);
+          if (len > MAX_BLOB_BYTES) throw new Error(`File too large (${len} bytes)`);
+          return r.blob();
+        })
+        .then(blob => {
+          clearTimeout(timer);
+          if (blob.size > MAX_BLOB_BYTES) throw new Error(`File too large (${blob.size} bytes)`);
+          return blob;
+        })
         .catch(e => { clearTimeout(timer); throw e; });
     };
 
