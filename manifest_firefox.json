@@ -2,6 +2,12 @@
   "manifest_version": 3,
   "name": "GDrive Universal Downloader",
   "version": "3.6.4",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "gdrive-universal-downloader@extension",
+      "strict_min_version": "128.0"
+    }
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self';"
   },

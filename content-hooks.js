@@ -15,11 +15,13 @@
 
   const VIDEO_PATTERNS = [
     /googlevideo\.com/,
-    /\.m3u8/,
-    /\.mpd/,
+    /\.m3u8(\?|$)/i,
+    /\.mpd(\?|$)/i,
+    /\.(mp4|webm|mov|ogg)(\?|$)/i,
     /videoplayback/,
     /mime=video/,
     /itag=\d+/,
+    /\/video\//i,
   ];
 
   const isVideoURL = url => VIDEO_PATTERNS.some(p => p.test(url));

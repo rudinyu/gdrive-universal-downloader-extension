@@ -1,46 +1,66 @@
-// GDrive Universal Downloader v2.5.3 — Injected Logic
+// GDrive Universal Downloader v3.6.4 — Injected Logic
 // Reads state and logs to window.__gdriveUniversalDownloader
 
 (function () {
-  const GUD = window.__gdriveUniversalDownloader;
-  if (!GUD) { console.warn('GUD namespace missing — hooks not installed.'); return; }
+  // Marker so popup can verify the IIFE actually executed
+  window.__gudRunMarker = Date.now();
+
+  const VERSION = '3.6.4';
+  const CONFIG = {
+    DEFAULT_SCALE: 1.0,
+    DEFAULT_QUALITY: 0.82,
+    DEFAULT_SCROLL_DELAY: 200,
+    REVOKE_DELAY: 60000,
+    MAX_DOWNLOADS: 50,
+    VIDEO_PATTERNS: [/googlevideo\.com/, /\.m3u8/, /\.mpd/, /videoplayback/, /mime=video/, /itag=\d+/],
+    YOUTUBE_PATTERN: /youtube\.com\/watch|youtu\.be\//i,
+    GDRIVE_PATTERN: /drive\.google\.com/i,
+    MIME_EXT_MAP: {
+      'video/mp4': 'mp4',
+      'video/webm': 'webm',
+      'video/quicktime': 'mov',
+      'video/x-matroska': 'mkv',
+      'audio/mpeg': 'mp3',
+      'audio/mp3': 'mp3',
+      'audio/wav': 'wav',
+      'audio/ogg': 'ogg',
+      'audio/webm': 'webm',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/gif': 'gif',
+      'image/webp': 'webp',
+    }
+  };
+
+  let GUD = window.__gdriveUniversalDownloader;
+  if (!GUD) {
+    window.__gdriveUniversalDownloader = { log: ['❌ Reload the page and try again (extension was updated).'], runComplete: true };
+    console.warn(`[GUD] v${VERSION} Namespace missing — reload the page.`);
+    return;
+  }
+
   const cfg = GUD.settings || {};
-  const SCALE        = cfg.scale       ?? 1.0;
-  const QUALITY      = cfg.quality     ?? 0.82;
-  const SCROLL_DELAY = cfg.scrollDelay ?? 200;
+  const SCALE        = cfg.scale       ?? CONFIG.DEFAULT_SCALE;
+  const QUALITY      = cfg.quality     ?? CONFIG.DEFAULT_QUALITY;
+  const SCROLL_DELAY = cfg.scrollDelay ?? CONFIG.DEFAULT_SCROLL_DELAY;
+  const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
 
   const log = (msg) => {
-    console.log(msg);
-    GUD.log = GUD.log || [];
-    GUD.log.push(msg);
+    const g = window.__gdriveUniversalDownloader || GUD;
+    g.log = g.log || [];
+    g.log.push(msg);
   };
 
-  const capturedVideoURLs = GUD.capturedVideoURLs || new Set();
-  GUD.runComplete = false;
-  const markComplete = () => { GUD.runComplete = true; };
-
-  const MIME_EXTENSION_MAP = {
-    'video/mp4': 'mp4',
-    'video/webm': 'webm',
-    'video/quicktime': 'mov',
-    'video/x-matroska': 'mkv',
-    'audio/mpeg': 'mp3',
-    'audio/mp3': 'mp3',
-    'audio/wav': 'wav',
-    'audio/ogg': 'ogg',
-    'audio/webm': 'webm',
-    'image/jpeg': 'jpg',
-    'image/png': 'png',
-    'image/gif': 'gif',
-    'image/webp': 'webp',
+  const markComplete = () => {
+    (window.__gdriveUniversalDownloader || GUD).runComplete = true;
   };
 
-  const normalizeExt = (ext, fallback = 'bin') => {
-    const val = (ext || '').replace(/^\./, '').toLowerCase();
-    return val || fallback;
-  };
+  log(`🚀 GUD v${VERSION} starting...`);
 
-  const getExtensionFromMime = (mime = '') => MIME_EXTENSION_MAP[mime.toLowerCase()] || null;
+  // ── Utilities ───────────────────────────────────────────────────
+  const normalizeExt = (ext, fallback = 'bin') => (ext || '').replace(/^\./, '').toLowerCase() || fallback;
+  const getExtensionFromMime = (mime = '') => CONFIG.MIME_EXT_MAP[mime.toLowerCase()] || null;
+  const isVideoURL = u => CONFIG.VIDEO_PATTERNS.some(p => p.test(u));
 
   const getExtensionFromURL = (url = '') => {
     if (!url) return null;
@@ -72,9 +92,6 @@
     return { src, type };
   };
 
-  log('🚀 GUD v2.5.3 starting...');
-
-  // ── Utilities ───────────────────────────────────────────────────
   const getTitle = () => {
     const meta = document.querySelector('meta[itemprop="name"]')?.content;
     const raw  = meta || document.title;
@@ -87,8 +104,12 @@
   const triggerDownload = (url, filename) => {
     const a = document.createElement('a');
     a.href = url; a.download = filename;
+    a.style.display = 'none';
     document.body.appendChild(a);
-    a.click();
+    // Use bubbles:false so SPA routers / event-delegation handlers on
+    // parent elements never see this synthetic click (prevents manga
+    // readers and image viewers from jumping to page 1).
+    a.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: false }));
     document.body.removeChild(a);
   };
 
@@ -116,8 +137,9 @@
   // ── Strategy: Video ─────────────────────────────────────────────
   const processVideo = async () => {
     const title = getTitle();
-    if (/youtube\.com\/watch|youtu\.be\//i.test(url)) {
+    if (CONFIG.YOUTUBE_PATTERN.test(url)) {
       log('📺 YouTube detected — using MediaRecorder capture...');
+
       const videoEl = document.querySelector('video');
       if (!videoEl) { log('❌ No video element found.'); markComplete(); return; }
       let stream;
@@ -137,7 +159,7 @@
           const blob    = new Blob(chunks, { type: 'video/webm' });
           const blobUrl = URL.createObjectURL(blob);
           triggerDownload(blobUrl, title + '.webm');
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
           log('✅ Recording saved: ' + title + '.webm');
           markComplete();
         }, 300);
@@ -146,17 +168,17 @@
       videoEl.play().catch(e => log('⚠️ Playback error: ' + e.message));
       recorder.start(1000);
       log('🔴 Recording started (' + mimeType + ')');
-      GUD.recording = true;
-      GUD.stopRecording = () => {
+      const setGUDProp = (k, v) => { (window.__gdriveUniversalDownloader || GUD)[k] = v; };
+      setGUDProp('recording', true);
+      setGUDProp('stopRecording', () => {
         if (recorder.state === 'inactive') return;
         recorder.requestData();
-        setTimeout(() => { recorder.stop(); GUD.recording = false; log('⏹ Stopped.'); }, 200);
-      };
-      videoEl.addEventListener('ended', () => { GUD.recording = false; GUD.stopRecording(); }, { once: true });
+        setTimeout(() => { recorder.stop(); setGUDProp('recording', false); log('⏹ Stopped.'); }, 200);
+      });
+      videoEl.addEventListener('ended', () => { setGUDProp('recording', false); (window.__gdriveUniversalDownloader || GUD).stopRecording?.(); }, { once: true });
       return;
     }
 
-    const isVideoURL = u => [/googlevideo\.com/, /\.m3u8/, /\.mpd/, /videoplayback/, /mime=video/, /itag=\d+/].some(p => p.test(u));
     const videoEl = document.querySelector('video');
     const videoInfo = getMediaSourceInfo(videoEl);
     const domSrc  = videoInfo.src;
@@ -275,7 +297,7 @@
     const blob    = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const blobUrl = URL.createObjectURL(blob);
     triggerDownload(blobUrl, title + '.txt');
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
     log('📋 Saving text file...');
     markComplete();
     return;
@@ -287,6 +309,76 @@
     triggerDownload(`https://drive.google.com/uc?export=download&id=${id}`, title);
     log('📁 Requesting file download...');
     markComplete();
+    return;
+  }
+
+  // ── Strategy: Universal (images / videos / PDFs from any page) ──
+  if (type === 'universal') {
+    const selected = GUD.selectedResources || [];
+    if (selected.length === 0) {
+      log('⚠️ No items selected.');
+      markComplete();
+      return;
+    }
+
+    // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
+    // Keep the timer running until the body is fully received, not just until headers arrive.
+    const fetchBlob = (src, ms = 8000) => {
+      const ctrl  = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), ms);
+      return fetch(src, { signal: ctrl.signal })
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+        .then(blob => { clearTimeout(timer); return blob; })
+        .catch(e => { clearTimeout(timer); throw e; });
+    };
+
+    if (selected.length > CONFIG.MAX_DOWNLOADS) {
+      log(`❌ Too many items selected (max ${CONFIG.MAX_DOWNLOADS}). Deselect some and retry.`);
+      markComplete();
+      return;
+    }
+
+    log(`⬇ Downloading ${selected.length} item(s)...`);
+    // Wrap in async IIFE — await is not valid in the non-async outer IIFE
+    (async () => {
+      let done = 0;
+      for (const item of selected) {
+        // Block non-http(s) URLs (defence-in-depth — popup also filters)
+        if (!/^https?:\/\//i.test(item.src)) {
+          log(`⚠️ Skipping ${item.filename}: blocked URL protocol`);
+          continue;
+        }
+        try {
+          if (item.type === 'image') {
+            try {
+              const blob    = await fetchBlob(item.src);
+              const blobUrl = URL.createObjectURL(blob);
+              triggerDownload(blobUrl, item.filename);
+              setTimeout(() => URL.revokeObjectURL(blobUrl), CONFIG.REVOKE_DELAY);
+            } catch (fetchErr) {
+              log(`⚠️ Fetch failed (${fetchErr.message}), trying direct link...`);
+              triggerDownload(item.src, item.filename);
+            }
+          } else if (item.type === 'video') {
+            // Direct link — videos are too large to hold in memory as a blob
+            const capturedArr = [...capturedVideoURLs];
+            const matchedUrl  = capturedArr.find(u => !u.startsWith('blob:')) || item.src;
+            const ext      = inferExtension(matchedUrl, '', 'mp4');
+            const filename = item.filename.replace(/\.[^.]+$/, '') + '.' + ext;
+            triggerDownload(matchedUrl, filename);
+          } else if (item.type === 'pdf') {
+            triggerDownload(item.src, item.filename);
+          }
+          log(`✅ ${item.filename}`);
+          done++;
+          await sleep(400);
+        } catch (err) {
+          log(`❌ ${item.filename}: ${err.message}`);
+        }
+      }
+      log(`🎉 Done! ${done}/${selected.length} downloaded.`);
+      markComplete();
+    })();
     return;
   }
 
