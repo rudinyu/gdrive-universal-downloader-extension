@@ -26,7 +26,7 @@
 
   const isVideoURL = url => VIDEO_PATTERNS.some(p => p.test(url));
   const recordURL  = url => {
-    if (url && typeof url === 'string' && isVideoURL(url))
+    if (url && typeof url === 'string' && /^https?:\/\//i.test(url) && isVideoURL(url))
       window.__gdriveUniversalDownloader.capturedVideoURLs.add(url);
   };
 

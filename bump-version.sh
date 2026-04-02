@@ -2,7 +2,7 @@
 # Usage: ./bump-version.sh <new-version> ["release title"] ["release notes"]
 # Example: ./bump-version.sh 3.6.0
 # Example: ./bump-version.sh 3.6.0 "Fix image detection" "- Fixed foo\n- Fixed bar"
-set -e
+set -euo pipefail
 
 NEW="$1"
 TITLE="${2:-v$NEW}"
@@ -28,7 +28,8 @@ OLD=$(grep '"version"' manifest.json | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -
 echo "Bumping $OLD → $NEW"
 
 # Update all version strings
-sed -i '' "s/$OLD/$NEW/g" \
+# Use | as delimiter so version numbers containing dots never break the pattern
+sed -i '' "s|$OLD|$NEW|g" \
   manifest.json \
   manifest_firefox.json \
   popup.html \
