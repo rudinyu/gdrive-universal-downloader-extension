@@ -147,7 +147,7 @@ async function withReferer(targetUrl, referer, fn) {
 // chrome.downloads.download() never makes a network request.
 // Caller must call URL.revokeObjectURL(blobUrl) when done.
 async function fetchAsBlob(url, referer, filename) {
-  const fetchOne = (targetUrl, ref) => withReferer(targetUrl, ref, () => fetch(targetUrl));
+  const fetchOne = (targetUrl, ref) => withReferer(targetUrl, ref, () => fetch(targetUrl, { credentials: 'include' }));
 
   let resp = await fetchOne(url, referer);
   const ct = resp.headers.get('content-type') || '';
@@ -230,7 +230,7 @@ async function resolveUrlFallback(url, filename) {
   // ── 2. Popup context (CORS bypass via host_permissions) ──────────
   let resp;
   try {
-    resp = await withReferer(url, currentTabUrl, () => fetch(url));
+    resp = await withReferer(url, currentTabUrl, () => fetch(url, { credentials: 'include' }));
   } catch (e) {
     appendLog(`⚠️ popup context also failed: ${e.message} — using original URL`);
     return { resolvedUrl: url, filename: fallbackName };
@@ -375,7 +375,7 @@ const resolvePreloadImages = async (images) => {
     if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
     appendLog(`🔍 resolving preload: ${img.src}`);
     try {
-      const resp = await withReferer(img.src, currentTabUrl, () => fetch(img.src));
+      const resp = await withReferer(img.src, currentTabUrl, () => fetch(img.src, { credentials: 'include' }));
       const ct   = resp.headers.get('content-type') || '';
       appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
       if (!resp.ok) {
