@@ -112,22 +112,23 @@ async function withReferer(targetUrl, referer, fn) {
     appendLog(`🔍 withReferer: invalid target URL — skipping rule`);
     return fn();
   }
-  // On Firefox the extension ID contains '@' so extensionInitiatorDomains is null.
-  // Without initiatorDomains there is no way to scope the DNR rule to only the
-  // popup's own requests — tabIds does not match extension-page fetches.  Installing
-  // an unscoped rule would rewrite the Referer of every request to this hostname
-  // from every tab while the rule is active, recreating the cross-tab leak.
-  // Skip the rule on Firefox and let fn() run without Referer injection.
-  if (!extensionInitiatorDomains) {
-    appendLog(`🔍 withReferer: Firefox — skipping DNR rule (no safe initiator scope)`);
-    return fn();
-  }
   const ruleId  = ++_ruleId;
   const condition = { urlFilter: `||${hostname}/` };
-  if (Number.isInteger(currentTabId) && currentTabId >= 0) {
-    condition.tabIds = [currentTabId];
+  if (extensionInitiatorDomains) {
+    // Chrome: scope to this extension's own requests + the current tab.
+    // tabIds further limits blast radius on top of initiatorDomains.
+    condition.initiatorDomains = extensionInitiatorDomains;
+    if (Number.isInteger(currentTabId) && currentTabId >= 0) {
+      condition.tabIds = [currentTabId];
+    }
+  } else {
+    // Firefox: extension ID contains '@' and is not a valid initiatorDomain.
+    // tabIds cannot scope extension-popup fetches either (it matches only
+    // page-originated requests from that tab, not extension-page fetches).
+    // Install with urlFilter only — the finally block removes the rule
+    // immediately after fn() completes, keeping the exposure window minimal.
+    appendLog(`🔍 withReferer: Firefox — rule unscoped (cleaned up after fetch)`);
   }
-  condition.initiatorDomains = extensionInitiatorDomains;
   appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
