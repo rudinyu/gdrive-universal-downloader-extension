@@ -45,8 +45,9 @@ let currentTabUrl         = null;
 let currentType           = 'unknown';
 let _ruleId               = 1000;
 const FALLBACK_FILENAME   = 'download.bin';
+const isFirefox = navigator.userAgent.includes('Firefox');
 const extensionInitiatorDomains =
-  typeof chrome.runtime?.id === 'string' ? [chrome.runtime.id] : null;
+  !isFirefox && typeof chrome.runtime?.id === 'string' ? [chrome.runtime.id] : null;
 
 const getSafeReferer = (value) => {
   try {
