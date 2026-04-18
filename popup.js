@@ -45,9 +45,10 @@ let currentTabUrl         = null;
 let currentType           = 'unknown';
 let _ruleId               = 1000;
 const FALLBACK_FILENAME   = 'download.bin';
-const isFirefox = navigator.userAgent.includes('Firefox');
-const extensionInitiatorDomains =
-  !isFirefox && typeof chrome.runtime?.id === 'string' ? [chrome.runtime.id] : null;
+// Firefox extension IDs contain '@' (e.g. hash@temporary-addon) and are not
+// valid hostnames. Chrome IDs are 32 lowercase letters and are valid hostnames.
+const _extId = typeof chrome.runtime?.id === 'string' ? chrome.runtime.id : '';
+const extensionInitiatorDomains = _extId && !_extId.includes('@') ? [_extId] : null;
 
 const getSafeReferer = (value) => {
   try {
