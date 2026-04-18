@@ -44,6 +44,8 @@ let currentTabId          = null;
 let currentTabUrl         = null;
 let currentType           = 'unknown';
 let _ruleId               = 1000;
+let pollInterval          = null;
+let pollTimeout           = null;
 const FALLBACK_FILENAME   = 'download.bin';
 // Firefox extension IDs contain '@' (e.g. hash@temporary-addon) and are not
 // valid hostnames. Chrome IDs are 32 lowercase letters and are valid hostnames.
@@ -110,12 +112,22 @@ async function withReferer(targetUrl, referer, fn) {
     appendLog(`🔍 withReferer: invalid target URL — skipping rule`);
     return fn();
   }
+  // On Firefox the extension ID contains '@' so extensionInitiatorDomains is null.
+  // Without initiatorDomains there is no way to scope the DNR rule to only the
+  // popup's own requests — tabIds does not match extension-page fetches.  Installing
+  // an unscoped rule would rewrite the Referer of every request to this hostname
+  // from every tab while the rule is active, recreating the cross-tab leak.
+  // Skip the rule on Firefox and let fn() run without Referer injection.
+  if (!extensionInitiatorDomains) {
+    appendLog(`🔍 withReferer: Firefox — skipping DNR rule (no safe initiator scope)`);
+    return fn();
+  }
   const ruleId  = ++_ruleId;
   const condition = { urlFilter: `||${hostname}/` };
   if (Number.isInteger(currentTabId) && currentTabId >= 0) {
     condition.tabIds = [currentTabId];
   }
-  if (extensionInitiatorDomains) condition.initiatorDomains = extensionInitiatorDomains;
+  condition.initiatorDomains = extensionInitiatorDomains;
   appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
@@ -206,7 +218,7 @@ async function resolveUrlFallback(url, filename) {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: currentTabId }, world: 'MAIN',
-      func: _pageResolveFunc, args: [url, filename, false],
+      func: _pageResolveFunc, args: [url, filename],
     });
     const r = results?.[0]?.result;
     if (r && !r.error) {
@@ -260,7 +272,6 @@ async function resolveUrlFallback(url, filename) {
     : fallbackName;
   return { resolvedUrl: found, filename: finalName };
 }
-let pollInterval          = null;
 // { type:'mediarecorder', quality:'hd1080', qualityLabel:'1080p', height:1080 }
 // | { type:'direct', url, qualityLabel, mimeType, sizeMB }
 let selectedYoutubeFormat = null;
@@ -292,8 +303,6 @@ const setBtnState = (running) => {
     btnText.textContent = running ? 'Running...' : 'Download';
   }
 };
-
-let pollTimeout = null;
 
 const stopPolling = () => {
   clearInterval(pollInterval); pollInterval = null;
@@ -331,7 +340,11 @@ const startPolling = (tabId) => {
           stopPolling();
         }
       }
-    } catch (e) { stopPolling(); }
+    } catch (e) {
+      appendLog('⚠️ Lost access to tab — check your downloads.');
+      setBtnState(false);
+      stopPolling();
+    }
   }, 500);
 };
 
@@ -693,10 +706,8 @@ downloadBtn.addEventListener('click', async () => {
         target: { tabId: currentTabId }, world: 'MAIN',
         func: () => document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim() || 'video',
       });
-      const safeTitle = (titleResult?.[0]?.result || 'video')
-        .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 180) || 'video';
       const ext      = selectedYoutubeFormat.mimeType === 'video/webm' ? 'webm' : 'mp4';
-      const filename = safeTitle + '.' + ext;
+      const filename = sanitizeFilename((titleResult?.[0]?.result || 'video') + '.' + ext);
       // Validate URL is a safe googlevideo.com HTTPS URL before downloading
       const dlUrl = new URL(selectedYoutubeFormat.url);
       if (dlUrl.protocol !== 'https:' || !/googlevideo\.com$/.test(dlUrl.hostname)) {
@@ -754,7 +765,9 @@ downloadBtn.addEventListener('click', async () => {
       // Videos/PDFs: direct chrome.downloads (too large to buffer as blob).
       {
         let done = 0;
-        for (const item of selectedResources) {
+        for (let i = 0; i < selectedResources.length; i++) {
+          if (i > 0) await new Promise(r => setTimeout(r, 200));
+          const item = selectedResources[i];
           appendLog(`🔍 download: ${item.src}`);
           const referer = item.referer || currentTabUrl;
           try {
@@ -793,7 +806,6 @@ downloadBtn.addEventListener('click', async () => {
           } catch (err) {
             appendLog(`❌ ${item.filename}: ${err?.message || String(err)}`);
           }
-          await new Promise(r => setTimeout(r, 200));
         }
         appendLog(`🎉 Done! ${done}/${selectedResources.length} downloaded.`);
         setBtnState(false);
