@@ -114,9 +114,8 @@ async function withReferer(targetUrl, referer, fn) {
   }
   const ruleId  = ++_ruleId;
   const condition = { urlFilter: `||${hostname}/` };
-  if (Number.isInteger(currentTabId) && currentTabId >= 0) {
-    condition.tabIds = [currentTabId];
-  }
+  // initiatorDomains already scopes the rule to this extension only — no tabIds needed.
+  // Adding tabIds would break popup-context fetch() since popup requests have tabId=-1.
   if (extensionInitiatorDomains) condition.initiatorDomains = extensionInitiatorDomains;
   appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
