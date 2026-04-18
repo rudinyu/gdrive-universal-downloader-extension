@@ -114,21 +114,10 @@ async function withReferer(targetUrl, referer, fn) {
   }
   const ruleId  = ++_ruleId;
   const condition = { urlFilter: `||${hostname}/` };
-  if (extensionInitiatorDomains) {
-    // Chrome: scope to this extension's own requests + the current tab.
-    // tabIds further limits blast radius on top of initiatorDomains.
-    condition.initiatorDomains = extensionInitiatorDomains;
-    if (Number.isInteger(currentTabId) && currentTabId >= 0) {
-      condition.tabIds = [currentTabId];
-    }
-  } else {
-    // Firefox: extension ID contains '@' and is not a valid initiatorDomain.
-    // tabIds cannot scope extension-popup fetches either (it matches only
-    // page-originated requests from that tab, not extension-page fetches).
-    // Install with urlFilter only — the finally block removes the rule
-    // immediately after fn() completes, keeping the exposure window minimal.
-    appendLog(`🔍 withReferer: Firefox — rule unscoped (cleaned up after fetch)`);
+  if (Number.isInteger(currentTabId) && currentTabId >= 0) {
+    condition.tabIds = [currentTabId];
   }
+  if (extensionInitiatorDomains) condition.initiatorDomains = extensionInitiatorDomains;
   appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
     await chrome.declarativeNetRequest.updateSessionRules({
@@ -164,6 +153,8 @@ async function fetchAsBlob(url, referer, filename) {
   const ct = resp.headers.get('content-type') || '';
   appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
 
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
   if (ct.includes('text/html')) {
     appendLog(`🔍 HTML wrapper — parsing for real image URL`);
     const text = await resp.text();
@@ -174,6 +165,7 @@ async function fetchAsBlob(url, referer, filename) {
     if (!found) throw new Error('HTML wrapper: no <img src> found inside');
     appendLog(`✓ resolved → ${found}`);
     resp = await fetchOne(found, currentTabUrl);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} on resolved URL`);
     const realName = decodeURIComponent(new URL(found).pathname.split('/').pop() || '');
     if (realName && /\.[a-z0-9]{2,5}$/i.test(realName)) {
       filename = sanitizeFilename(realName, filename);
@@ -246,6 +238,12 @@ async function resolveUrlFallback(url, filename) {
 
   const ct = resp.headers.get('content-type') || '';
   appendLog(`🔍 content-type (popup): ${ct}`);
+
+  if (!resp.ok) {
+    appendLog(`⚠️ HTTP ${resp.status} — using original URL`);
+    resp.body?.cancel();
+    return { resolvedUrl: url, filename: fallbackName };
+  }
 
   if (!ct.includes('text/html')) {
     resp.body?.cancel();
@@ -380,6 +378,10 @@ const resolvePreloadImages = async (images) => {
       const resp = await withReferer(img.src, currentTabUrl, () => fetch(img.src));
       const ct   = resp.headers.get('content-type') || '';
       appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);
+      if (!resp.ok) {
+        appendLog(`🔍 HTTP ${resp.status} — using URL as-is`);
+        return img;
+      }
       if (!ct.includes('text/html')) {
         appendLog(`🔍 not HTML — using URL as-is`);
         return img;
