@@ -54,7 +54,8 @@ const getSafeReferer = (value) => {
   try {
     const parsed = new URL(value);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return parsed.origin + '/';
+    parsed.hash = '';
+    return parsed.href;
   } catch {
     return null;
   }
@@ -111,6 +112,9 @@ async function withReferer(targetUrl, referer, fn) {
   }
   const ruleId  = ++_ruleId;
   const condition = { urlFilter: `||${hostname}/` };
+  if (Number.isInteger(currentTabId) && currentTabId >= 0) {
+    condition.tabIds = [currentTabId];
+  }
   if (extensionInitiatorDomains) condition.initiatorDomains = extensionInitiatorDomains;
   appendLog(`🔍 declarativeNetRequest: Referer="${safeReferer}" for ||${hostname}/  (rule ${ruleId})`);
   try {
