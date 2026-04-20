@@ -68,7 +68,7 @@ const sanitizeFilename = (name, fallback = FALLBACK_FILENAME) => {
   let basename = raw.split(/[/\\]/).pop() || '';
   basename = basename
     .replace(/[\u0000-\u001f]/g, '')
-    .replace(/[<>:"|?*\u007f]/g, '_')
+    .replace(/[<>:"|?\x22\u007f]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^\.+/, '');
