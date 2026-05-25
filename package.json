@@ -1,0 +1,16 @@
+{
+  "name": "gdrive-universal-downloader",
+  "version": "3.7.12",
+  "private": true,
+  "scripts": {
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFiles": ["./test/setup.js"]
+  }
+}

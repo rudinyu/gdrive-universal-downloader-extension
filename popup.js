@@ -938,4 +938,7 @@ stopBtn.addEventListener('click', async () => {
   } catch (e) { appendLog('❌ Stop failed.'); }
 });
 
-init();
+if (typeof module === 'undefined') init();
+
+// Export pure utilities for unit testing (no-op in browser where module is undefined)
+if (typeof module !== 'undefined') module.exports = { sanitizeFilename, getSafeReferer, FALLBACK_FILENAME };

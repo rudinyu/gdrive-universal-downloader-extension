@@ -27,6 +27,11 @@ REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 OLD=$(grep '"version"' manifest.json | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
 echo "Bumping $OLD -> $NEW"
 
+# Run tests before touching any files
+echo "Running tests..."
+npm test
+echo "Tests passed"
+
 # Update all version strings
 # Use | as delimiter so version numbers containing dots never break the pattern
 # manifest_firefox.json is optional — only updated when present

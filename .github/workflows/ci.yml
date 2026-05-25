@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check manifest JSON is valid
+        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json'))" && echo "manifest.json OK"
+
+      - name: Check JS syntax
+        run: |
+          for f in popup.js downloader.js content-hooks.js detect.js; do
+            node --check "$f" && echo "$f OK"
+          done
+
+      - name: Verify build produces zips
+        run: bash build.sh && ls -lh chrome.zip firefox.zip
