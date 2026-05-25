@@ -46,6 +46,7 @@ let currentType           = 'unknown';
 let _ruleId               = 1000;
 let pollInterval          = null;
 let pollTimeout           = null;
+let _isRecording          = false;
 const FALLBACK_FILENAME   = 'download.bin';
 // Firefox extension IDs contain '@' (e.g. hash@temporary-addon) and are not
 // valid hostnames. Chrome IDs are 32 lowercase letters and are valid hostnames.
@@ -305,17 +306,28 @@ const setBtnState = (running) => {
 const stopPolling = () => {
   clearInterval(pollInterval); pollInterval = null;
   clearTimeout(pollTimeout);   pollTimeout  = null;
+  _isRecording = false;
 };
 
 const startPolling = (tabId) => {
   stopPolling();
 
-  // Safety net: re-enable the button after 90 s even if nothing completes
-  pollTimeout = setTimeout(() => {
-    appendLog('⚠️ Timeout — check your browser downloads or reload the page.');
-    setBtnState(false);
-    stopPolling();
-  }, 90000);
+  // Safety net: re-enable the button if nothing completes.
+  // While a YouTube recording is active, extend the window instead of firing.
+  const scheduleTimeout = (ms) => {
+    pollTimeout = setTimeout(function reschedule() {
+      if (pollInterval === null) return;
+      if (_isRecording) {
+        appendLog('🔍 Safety timeout extended — recording in progress.');
+        pollTimeout = setTimeout(reschedule, 30000);
+        return;
+      }
+      appendLog('⚠️ Timeout — check your browser downloads or reload the page.');
+      setBtnState(false);
+      stopPolling();
+    }, ms);
+  };
+  scheduleTimeout(90000);
 
   pollInterval = setInterval(async () => {
     try {
@@ -331,6 +343,7 @@ const startPolling = (tabId) => {
       });
       const { msgs = [], recording = false, runComplete = false } = results?.[0]?.result || {};
       msgs.forEach(appendLog);
+      _isRecording = recording;
       stopBtn.style.display = recording ? 'flex' : 'none';
       if (!recording && downloadBtn.disabled && (runComplete || !msgs.some(m => /generating|scrolling/i.test(m)))) {
         if (runComplete || msgs.some(m => /Done|🎉|❌|⚠️ Auto-detect failed/i.test(m))) {
