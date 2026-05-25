@@ -374,6 +374,9 @@ const resolvePreloadImages = async (images) => {
     if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
     appendLog(`🔍 resolving preload: ${img.src}`);
     try {
+      // credentials:'include' needed here — target is an authenticated Google Drive page,
+      // not an open CDN. fetchBlob omits credentials because its CDN targets serve
+      // wildcard CORS (Access-Control-Allow-Origin: *), which browsers reject for credentialed requests.
       const resp = await withReferer(img.src, currentTabUrl, () => fetch(img.src, { credentials: 'include' }));
       const ct   = resp.headers.get('content-type') || '';
       appendLog(`🔍 content-type: ${ct} | status: ${resp.status}`);

@@ -324,7 +324,10 @@
       return;
     }
 
-    // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
+    // No credentials: CDN URLs use wildcard CORS (Access-Control-Allow-Origin: *) which
+    // rejects credentialed requests. resolvePreloadImages uses credentials:'include' instead
+    // because those targets are authenticated Google Drive pages, not open CDNs.
+
     // Keep the timer running until the body is fully received, not just until headers arrive.
     const MAX_BLOB_BYTES = 100 * 1024 * 1024; // 100 MB — prevent memory exhaustion
     const fetchBlob = async (src, ms = 8000) => {
@@ -333,8 +336,13 @@
       try {
         const r = await fetch(src, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const len = parseInt(r.headers.get('content-length') || '0', 10);
-        if (len > MAX_BLOB_BYTES) throw new Error(`File too large (${len} bytes)`);
+        // Skip when header is absent (chunked transfer) or non-numeric (malformed server);
+        // blob.size below is the real safety net for both cases.
+        const lenHeader = r.headers.get('content-length');
+        if (lenHeader !== null) {
+          const len = parseInt(lenHeader, 10);
+          if (!isNaN(len) && len > MAX_BLOB_BYTES) throw new Error(`File too large (${len} bytes)`);
+        }
         const blob = await r.blob();
         if (blob.size > MAX_BLOB_BYTES) throw new Error(`File too large (${blob.size} bytes)`);
         return blob;
