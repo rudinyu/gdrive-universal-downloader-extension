@@ -25,23 +25,23 @@ REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 
 # Detect current version from manifest.json
 OLD=$(grep '"version"' manifest.json | grep -o '[0-9]*\.[0-9]*\.[0-9]*' | head -1)
-echo "Bumping $OLD → $NEW"
+echo "Bumping $OLD -> $NEW"
 
 # Update all version strings
 # Use | as delimiter so version numbers containing dots never break the pattern
-sed -i '' "s|$OLD|$NEW|g" \
-  manifest.json \
-  manifest_firefox.json \
-  popup.html \
-  downloader.js
+# manifest_firefox.json is optional — only updated when present
+VERSIONED_FILES=(manifest.json popup.html downloader.js)
+[[ -f manifest_firefox.json ]] && VERSIONED_FILES+=(manifest_firefox.json)
 
-echo "✅ Updated: manifest.json, manifest_firefox.json, popup.html, downloader.js"
+sed -i '' "s|$OLD|$NEW|g" "${VERSIONED_FILES[@]}"
+
+echo "Updated: ${VERSIONED_FILES[*]}"
 
 # Rebuild zips
 bash build.sh
 
 # Commit
-git add manifest.json manifest_firefox.json popup.html downloader.js
+git add "${VERSIONED_FILES[@]}"
 git commit -m "chore: bump version to $NEW
 
 Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
@@ -51,9 +51,9 @@ git tag "$TAG"
 git push origin "$BRANCH"
 git push origin "$TAG"
 
-echo "✅ Tagged and pushed $TAG"
+echo "Tagged and pushed $TAG"
 
-# ── GitHub Release (create or update) ────────────────────────────────────────
+# -- GitHub Release (create or update) ----------------------------------------
 # gh release create fails if a release for this tag already exists
 # (GitHub sometimes auto-creates a draft). Use create, and if it conflicts
 # fall back to edit + re-upload.
@@ -64,10 +64,10 @@ if gh release create "$TAG" chrome.zip firefox.zip \
      --title "$TITLE" \
      --notes "$release_notes" \
      --target "$BRANCH" 2>/dev/null; then
-  echo "✅ GitHub release created: https://github.com/$REPO/releases/tag/$TAG"
+  echo "GitHub release created: https://github.com/$REPO/releases/tag/$TAG"
 else
-  echo "⚠️  Release already exists — updating..."
+  echo "Release already exists -- updating..."
   gh release edit "$TAG" --title "$TITLE" --notes "$release_notes"
   gh release upload "$TAG" chrome.zip firefox.zip --clobber
-  echo "✅ GitHub release updated: https://github.com/$REPO/releases/tag/$TAG"
+  echo "GitHub release updated: https://github.com/$REPO/releases/tag/$TAG"
 fi
