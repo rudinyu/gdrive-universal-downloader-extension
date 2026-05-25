@@ -327,22 +327,20 @@
     // fetch with timeout — no credentials (CDNs with wildcard CORS reject credentialed requests)
     // Keep the timer running until the body is fully received, not just until headers arrive.
     const MAX_BLOB_BYTES = 100 * 1024 * 1024; // 100 MB — prevent memory exhaustion
-    const fetchBlob = (src, ms = 8000) => {
+    const fetchBlob = async (src, ms = 8000) => {
       const ctrl  = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), ms);
-      return fetch(src, { signal: ctrl.signal })
-        .then(r => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const len = parseInt(r.headers.get('content-length') || '0', 10);
-          if (len > MAX_BLOB_BYTES) throw new Error(`File too large (${len} bytes)`);
-          return r.blob();
-        })
-        .then(blob => {
-          clearTimeout(timer);
-          if (blob.size > MAX_BLOB_BYTES) throw new Error(`File too large (${blob.size} bytes)`);
-          return blob;
-        })
-        .catch(e => { clearTimeout(timer); throw e; });
+      try {
+        const r = await fetch(src, { signal: ctrl.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const len = parseInt(r.headers.get('content-length') || '0', 10);
+        if (len > MAX_BLOB_BYTES) throw new Error(`File too large (${len} bytes)`);
+        const blob = await r.blob();
+        if (blob.size > MAX_BLOB_BYTES) throw new Error(`File too large (${blob.size} bytes)`);
+        return blob;
+      } finally {
+        clearTimeout(timer);
+      }
     };
 
     if (selected.length > CONFIG.MAX_DOWNLOADS) {

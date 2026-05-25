@@ -388,8 +388,8 @@ const resolvePreloadImages = async (images) => {
       const text = await resp.text();
       const doc  = new DOMParser().parseFromString(text, 'text/html');
       const found = [...doc.querySelectorAll('img[src]')]
-        .map(el => new URL(el.getAttribute('src'), resp.url).href)
-        .find(src => /^https?:\/\//i.test(src));
+        .map(el => { try { return new URL(el.getAttribute('src'), resp.url).href; } catch { return null; } })
+        .find(src => src && /^https?:\/\//i.test(src));
       if (!found) {
         appendLog(`⚠️ no <img> found in HTML wrapper`);
         return img;
