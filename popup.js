@@ -483,9 +483,116 @@ const renderResourcePicker = (resources) => {
   updateResourceCount();
 };
 
+// ── Minimal MP4 muxer ────────────────────────────────────────────
+// Combines a video-only MP4 and an audio-only MP4 ArrayBuffer into one MP4.
+// Both inputs must be non-fragmented single-track MP4 files.
+function muxYouTubeMP4(videoBuf, audioBuf) {
+  const r32 = (b, o) => new DataView(b).getUint32(o);
+  const typ = (b, o) => String.fromCharCode(...new Uint8Array(b, o + 4, 4));
+
+  function findBox(b, start, end, type) {
+    let pos = start;
+    while (pos + 8 <= end) {
+      const size = r32(b, pos);
+      if (size < 8) break;
+      if (typ(b, pos) === type) return { offset: pos, size };
+      pos += size;
+    }
+    return null;
+  }
+
+  function getTopBoxes(b) {
+    const len = b.byteLength;
+    return {
+      ftyp: findBox(b, 0, len, 'ftyp'),
+      moov: findBox(b, 0, len, 'moov'),
+      mdat: findBox(b, 0, len, 'mdat'),
+    };
+  }
+
+  function adjustedTrak(srcBuf, trak, delta) {
+    const bytes = new Uint8Array(trak.size);
+    bytes.set(new Uint8Array(srcBuf, trak.offset, trak.size));
+    const buf = bytes.buffer;
+
+    const mdia = findBox(buf, 8, trak.size, 'mdia');
+    if (!mdia) return bytes;
+    const minf = findBox(buf, mdia.offset + 8, mdia.offset + mdia.size, 'minf');
+    if (!minf) return bytes;
+    const stbl = findBox(buf, minf.offset + 8, minf.offset + minf.size, 'stbl');
+    if (!stbl) return bytes;
+
+    const stco = findBox(buf, stbl.offset + 8, stbl.offset + stbl.size, 'stco');
+    if (stco) {
+      const dv = new DataView(buf);
+      const count = dv.getUint32(stco.offset + 12);
+      for (let i = 0; i < count; i++) {
+        const off = stco.offset + 16 + i * 4;
+        dv.setUint32(off, dv.getUint32(off) + delta);
+      }
+    }
+
+    const co64 = findBox(buf, stbl.offset + 8, stbl.offset + stbl.size, 'co64');
+    if (co64) {
+      const dv = new DataView(buf);
+      const count = dv.getUint32(co64.offset + 12);
+      for (let i = 0; i < count; i++) {
+        const off = co64.offset + 16 + i * 8;
+        const lo = dv.getUint32(off + 4);
+        const sum = lo + delta;
+        dv.setUint32(off + 4, sum >>> 0);
+        if (delta >= 0 && sum > 0xFFFFFFFF) dv.setUint32(off, dv.getUint32(off) + 1);
+        else if (delta < 0 && sum < 0)      dv.setUint32(off, dv.getUint32(off) - 1);
+      }
+    }
+    return bytes;
+  }
+
+  const vB = getTopBoxes(videoBuf), aB = getTopBoxes(audioBuf);
+  // Detect fragmented MP4 (moof boxes) — fMP4 has many mdat fragments; only the first would be
+  // copied, producing a silently truncated file. Bail early with a clear error.
+  if (findBox(videoBuf, 0, videoBuf.byteLength, 'moof'))
+    throw new Error('Video stream is fragmented MP4 (fMP4) — mux not supported; use MediaRecorder instead');
+  if (findBox(audioBuf, 0, audioBuf.byteLength, 'moof'))
+    throw new Error('Audio stream is fragmented MP4 (fMP4) — mux not supported; use MediaRecorder instead');
+  if (!vB.moov || !vB.mdat) throw new Error('Video stream is not a plain MP4 (no moov/mdat) — use MediaRecorder instead');
+  if (!aB.moov || !aB.mdat) throw new Error('Audio stream is not a plain MP4');
+
+  const mvhd  = findBox(videoBuf, vB.moov.offset + 8, vB.moov.offset + vB.moov.size, 'mvhd');
+  const vTrak = findBox(videoBuf, vB.moov.offset + 8, vB.moov.offset + vB.moov.size, 'trak');
+  const aTrak = findBox(audioBuf, aB.moov.offset + 8, aB.moov.offset + aB.moov.size, 'trak');
+  if (!mvhd || !vTrak || !aTrak) throw new Error('Missing mvhd or trak box');
+
+  const ftypSize    = vB.ftyp ? vB.ftyp.size : 0;
+  const newMoovSize = 8 + mvhd.size + vTrak.size + aTrak.size;
+  const vDelta = (ftypSize + newMoovSize) - vB.mdat.offset;
+  const aDelta = (ftypSize + newMoovSize + vB.mdat.size) - aB.mdat.offset;
+
+  const vTrakAdj = adjustedTrak(videoBuf, vTrak, vDelta);
+  const aTrakAdj = adjustedTrak(audioBuf, aTrak, aDelta);
+  const mvhdBytes = new Uint8Array(videoBuf, mvhd.offset, mvhd.size);
+
+  const moov = new Uint8Array(newMoovSize);
+  new DataView(moov.buffer).setUint32(0, newMoovSize);
+  moov[4] = 0x6d; moov[5] = 0x6f; moov[6] = 0x6f; moov[7] = 0x76; // 'moov'
+  let p = 8;
+  moov.set(mvhdBytes, p);  p += mvhd.size;
+  moov.set(vTrakAdj, p);   p += vTrak.size;
+  moov.set(aTrakAdj, p);
+
+  const total = ftypSize + newMoovSize + vB.mdat.size + aB.mdat.size;
+  const out = new Uint8Array(total);
+  p = 0;
+  if (vB.ftyp) { out.set(new Uint8Array(videoBuf, vB.ftyp.offset, vB.ftyp.size), p); p += ftypSize; }
+  out.set(moov, p);                                                                    p += newMoovSize;
+  out.set(new Uint8Array(videoBuf, vB.mdat.offset, vB.mdat.size), p);                 p += vB.mdat.size;
+  out.set(new Uint8Array(audioBuf, aB.mdat.offset, aB.mdat.size), p);
+  return out.buffer;
+}
+
 // ── YouTube quality picker ───────────────────────────────────────
-// formats = video-only adaptive streams (for quality labels & direct dl)
-const renderYoutubeFormatPicker = (formats) => {
+// { adaptive, progressive, bestAudio } — see init() for shape
+const renderYoutubeFormatPicker = ({ adaptive, progressive, bestAudio }) => {
   youtubeFormatPicker.style.display = 'block';
   videoNote.classList.remove('visible');
   youtubeFormatList.innerHTML = '';
@@ -536,9 +643,13 @@ const renderYoutubeFormatPicker = (formats) => {
       radio.checked = true;
       selectedYoutubeFormat = value;
       downloadBtn.disabled = false;
-      youtubeFormatLabel.textContent = value.type === 'direct'
-        ? value.qualityLabel + ' (video only)'
-        : value.qualityLabel + ' (MediaRecorder)';
+      const labels = {
+        direct:       v => v.qualityLabel + ' (video only)',
+        progressive:  v => v.qualityLabel + ' (direct · with audio)',
+        mux:          v => v.qualityLabel + ' (mux · with audio)',
+        mediarecorder:v => v.qualityLabel + ' (MediaRecorder)',
+      };
+      youtubeFormatLabel.textContent = (labels[value.type] || (v => v.qualityLabel))(value);
     };
     div.addEventListener('click', select);
     if (isFirst) select();
@@ -548,13 +659,48 @@ const renderYoutubeFormatPicker = (formats) => {
   const HD_BLUE = { text: 'HD' };
   const hdBadge = (h) => h >= 1080 ? HD_TEAL : h >= 720 ? HD_BLUE : null;
 
-  // ── Section 1: With Audio via MediaRecorder ──────────────────────
-  const mrHeader = document.createElement('div');
-  mrHeader.className   = 'resource-section-header';
-  mrHeader.textContent = 'With Audio (MediaRecorder)';
-  youtubeFormatList.appendChild(mrHeader);
+  let isFirst = true;
+  const firstItem = (fn) => { fn(isFirst); isFirst = false; };
 
-  // Maps pixel height to YouTube player quality name
+  // ── Section 1: Video + Audio · Direct (progressive, pre-muxed by YouTube) ──
+  if (progressive.length > 0) {
+    const hdr = document.createElement('div');
+    hdr.className   = 'resource-section-header';
+    hdr.textContent = 'Video + Audio · Direct';
+    youtubeFormatList.appendChild(hdr);
+    progressive.forEach(f => {
+      const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
+      const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
+      firstItem(first => addItem('🎬', f.qualityLabel, hdBadge(f.height),
+        `${ext}  ${size} · with audio · quick`,
+        { type: 'progressive', url: f.url, qualityLabel: f.qualityLabel, mimeType: f.mimeType },
+        first));
+    });
+  }
+
+  // ── Section 2: Video + Audio · Mux (adaptive video + best audio stream) ──
+  // Hard limit: popup holds 3× the stream size in memory (video buf + audio buf + muxed output).
+  // 300 MB total is safe for most machines; larger streams should use MediaRecorder instead.
+  const MUX_MB_LIMIT = 300;
+  const muxable = adaptive.filter(f => f.mimeType === 'video/mp4'
+    && (f.sizeMB || 0) + (bestAudio?.sizeMB || 0) <= MUX_MB_LIMIT);
+  if (muxable.length > 0 && bestAudio) {
+    const hdr = document.createElement('div');
+    hdr.className   = 'resource-section-header';
+    hdr.textContent = 'Video + Audio · Mux';
+    youtubeFormatList.appendChild(hdr);
+    muxable.forEach(f => {
+      const totalMB = (f.sizeMB || 0) + (bestAudio.sizeMB || 0);
+      const size = totalMB > 0 ? `~${totalMB} MB` : '';
+      firstItem(first => addItem('🎬', f.qualityLabel, hdBadge(f.height),
+        `MP4  ${size} · with audio · mux`,
+        { type: 'mux', videoUrl: f.url, audioUrl: bestAudio.url,
+          qualityLabel: f.qualityLabel, videoSizeMB: f.sizeMB, audioSizeMB: bestAudio.sizeMB },
+        first));
+    });
+  }
+
+  // ── Section 3: With Audio via MediaRecorder ──────────────────────
   const ytQ = (h) => {
     if (h >= 2160) return 'hd2160';
     if (h >= 1440) return 'hd1440';
@@ -564,36 +710,37 @@ const renderYoutubeFormatPicker = (formats) => {
     if (h >= 360)  return 'medium';
     return 'small';
   };
+  const mrHeader = document.createElement('div');
+  mrHeader.className   = 'resource-section-header';
+  mrHeader.textContent = 'With Audio (MediaRecorder)';
+  youtubeFormatList.appendChild(mrHeader);
 
-  // Auto — no quality change, record whatever is currently playing
-  addItem('🎥', 'Auto',
+  firstItem(first => addItem('🎥', 'Auto',
     { text: 'current quality', style: 'background:#1a2a3a;color:#80cbc4' },
     'MediaRecorder · keep tab open',
     { type: 'mediarecorder', quality: 'auto', qualityLabel: 'Auto' },
-    true);
+    first));
 
-  // One entry per unique height, sorted high → low
-  const heights = [...new Set(formats.map(f => f.height))].sort((a, b) => b - a);
+  const heights = [...new Set(adaptive.map(f => f.height))].sort((a, b) => b - a);
   heights.forEach(h => {
-    addItem('🎥', `${h}p`, hdBadge(h),
+    firstItem(first => addItem('🎥', `${h}p`, hdBadge(h),
       'MediaRecorder · keep tab open',
       { type: 'mediarecorder', quality: ytQ(h), qualityLabel: `${h}p`, height: h },
-      false);
+      first));
   });
 
-  // ── Section 2: Video Only (direct download) ──────────────────────
-  if (formats.length > 0) {
+  // ── Section 4: Video Only (direct download) ──────────────────────
+  if (adaptive.length > 0) {
     const voHeader = document.createElement('div');
     voHeader.className   = 'resource-section-header';
     voHeader.textContent = 'Video Only (no audio)';
     youtubeFormatList.appendChild(voHeader);
-
-    formats.forEach(f => {
+    adaptive.forEach(f => {
       const ext  = f.mimeType === 'video/webm' ? 'WebM' : 'MP4';
       const size = f.sizeMB > 0 ? `~${f.sizeMB} MB` : '';
-      addItem('🎬', f.qualityLabel, hdBadge(f.height), `${ext}  ${size} · no audio`,
+      firstItem(first => addItem('🎬', f.qualityLabel, hdBadge(f.height), `${ext}  ${size} · no audio`,
         { type: 'direct', url: f.url, qualityLabel: f.qualityLabel, mimeType: f.mimeType, sizeMB: f.sizeMB },
-        false);
+        first));
     });
   }
 };
@@ -632,13 +779,31 @@ async function init() {
             sizeMB:       f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
           });
           // Video-only adaptive streams — deduped by qualityLabel, sorted high→low
-          const seen = new Set();
+          const seenV = new Set();
           const adaptive = [...(sd.formats || []), ...(sd.adaptiveFormats || [])]
             .filter(f => f.url && f.mimeType?.startsWith('video/') && !hasAudio(f))
             .map(toEntry)
             .sort((a, b) => b.height - a.height)
-            .filter(f => { if (seen.has(f.qualityLabel)) return false; seen.add(f.qualityLabel); return true; });
-          youtubeFormats = adaptive; // always an array (may be empty)
+            .filter(f => { if (seenV.has(f.qualityLabel)) return false; seenV.add(f.qualityLabel); return true; });
+          // Progressive (video+audio pre-muxed) — deduped by qualityLabel, sorted high→low
+          const seenP = new Set();
+          const progressive = [...(sd.formats || [])]
+            .filter(f => f.url && f.mimeType?.startsWith('video/') && hasAudio(f))
+            .map(toEntry)
+            .sort((a, b) => b.height - a.height)
+            .filter(f => { if (seenP.has(f.qualityLabel)) return false; seenP.add(f.qualityLabel); return true; });
+          // Best audio-only stream for mux (prefer audio/mp4 = AAC)
+          const audioStreams = [...(sd.adaptiveFormats || [])]
+            .filter(f => f.url && f.mimeType?.startsWith('audio/'))
+            .map(f => ({
+              url:      f.url,
+              mimeType: (f.mimeType || '').split(';')[0],
+              bitrate:  f.bitrate || 0,
+              sizeMB:   f.contentLength ? Math.round(parseInt(f.contentLength) / 1048576) : 0,
+            }))
+            .sort((a, b) => b.bitrate - a.bitrate);
+          const bestAudio = audioStreams.find(f => f.mimeType === 'audio/mp4') || audioStreams[0] || null;
+          youtubeFormats = { adaptive, progressive, bestAudio };
         }
         return {
           type: GUD.detectedType || 'unknown',
@@ -715,8 +880,8 @@ selectNoneBtn.addEventListener('click', () => {
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
 
-  // ── YouTube video-only direct download ───────────────────────────
-  if (currentType === 'video' && selectedYoutubeFormat?.type === 'direct') {
+  // ── YouTube direct downloads (video-only or progressive with audio) ─
+  if (currentType === 'video' && (selectedYoutubeFormat?.type === 'direct' || selectedYoutubeFormat?.type === 'progressive')) {
     setBtnState(true);
     logBox.innerHTML = '';
     try {
@@ -724,16 +889,70 @@ downloadBtn.addEventListener('click', async () => {
         target: { tabId: currentTabId }, world: 'MAIN',
         func: () => document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim() || 'video',
       });
-      const ext      = selectedYoutubeFormat.mimeType === 'video/webm' ? 'webm' : 'mp4';
+      const fmt      = selectedYoutubeFormat;
+      const ext      = fmt.mimeType === 'video/webm' ? 'webm' : 'mp4';
       const filename = sanitizeFilename((titleResult?.[0]?.result || 'video') + '.' + ext);
-      // Validate URL is a safe googlevideo.com HTTPS URL before downloading
-      const dlUrl = new URL(selectedYoutubeFormat.url);
+      const dlUrl = new URL(fmt.url);
       if (dlUrl.protocol !== 'https:' || !/googlevideo\.com$/.test(dlUrl.hostname)) {
         throw new Error('Unexpected download URL origin');
       }
-      appendLog(`⬇ Downloading ${selectedYoutubeFormat.qualityLabel} ${ext.toUpperCase()} (no audio)...`);
-      await chrome.downloads.download({ url: selectedYoutubeFormat.url, filename });
+      const label = fmt.type === 'progressive'
+        ? `${fmt.qualityLabel} ${ext.toUpperCase()} (with audio)`
+        : `${fmt.qualityLabel} ${ext.toUpperCase()} (no audio)`;
+      appendLog(`⬇ Downloading ${label}...`);
+      await chrome.downloads.download({ url: fmt.url, filename });
       appendLog('✅ Check your downloads folder.');
+    } catch (err) {
+      appendLog('❌ ' + (err?.message || String(err)));
+    }
+    setBtnState(false);
+    return;
+  }
+
+  // ── YouTube mux download (fetch video + audio, combine into MP4) ──
+  if (currentType === 'video' && selectedYoutubeFormat?.type === 'mux') {
+    setBtnState(true);
+    logBox.innerHTML = '';
+    try {
+      const fmt = selectedYoutubeFormat;
+      const titleResult = await chrome.scripting.executeScript({
+        target: { tabId: currentTabId }, world: 'MAIN',
+        func: () => document.title.replace(/\s*-\s*YouTube\s*$/i, '').trim() || 'video',
+      });
+      const title    = titleResult?.[0]?.result || 'video';
+      const filename = sanitizeFilename(title + '.mp4');
+
+      for (const u of [fmt.videoUrl, fmt.audioUrl]) {
+        const parsed = new URL(u);
+        if (parsed.protocol !== 'https:' || !/googlevideo\.com$/.test(parsed.hostname))
+          throw new Error('Unexpected stream URL origin');
+      }
+
+      const totalMB = (fmt.videoSizeMB || 0) + (fmt.audioSizeMB || 0);
+      appendLog(`⬇ Fetching video stream (~${fmt.videoSizeMB} MB)...`);
+      const videoResp = await fetch(fmt.videoUrl, { credentials: 'include' });
+      if (!videoResp.ok) throw new Error(`Video fetch failed: ${videoResp.status}`);
+      const videoBuf = await videoResp.arrayBuffer();
+
+      appendLog(`⬇ Fetching audio stream (~${fmt.audioSizeMB} MB)...`);
+      const audioResp = await fetch(fmt.audioUrl, { credentials: 'include' });
+      if (!audioResp.ok) throw new Error(`Audio fetch failed: ${audioResp.status}`);
+      const audioBuf = await audioResp.arrayBuffer();
+
+      appendLog('🔧 Muxing...');
+      const muxed   = muxYouTubeMP4(videoBuf, audioBuf);
+      const blobUrl = URL.createObjectURL(new Blob([muxed], { type: 'video/mp4' }));
+      // Revoke only after download completes — chrome.downloads.download resolves on initiation,
+      // not completion, so revoking immediately risks losing the blob mid-transfer.
+      const dlId = await chrome.downloads.download({ url: blobUrl, filename });
+      chrome.downloads.onChanged.addListener(function revokeOnDone(delta) {
+        if (delta.id === dlId && delta.state &&
+            (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
+          URL.revokeObjectURL(blobUrl);
+          chrome.downloads.onChanged.removeListener(revokeOnDone);
+        }
+      });
+      appendLog(`✅ ${fmt.qualityLabel} MP4 saved (${totalMB} MB).`);
     } catch (err) {
       appendLog('❌ ' + (err?.message || String(err)));
     }
