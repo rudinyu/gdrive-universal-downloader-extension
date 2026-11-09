@@ -1,6 +1,6 @@
 {
   "name": "gdrive-universal-downloader",
-  "version": "3.7.12",
+  "version": "3.7.17",
   "private": true,
   "scripts": {
     "test": "jest"

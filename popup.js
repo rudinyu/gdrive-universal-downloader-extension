@@ -384,6 +384,7 @@ const updateResourceCount = () => {
 // image URL and the preload URL stored as `referer`.
 const resolvePreloadImages = async (images) => {
   return Promise.all(images.map(async (img) => {
+    if (img.source === 'performance') return img;
     if (img.w !== 0 || img.h !== 0) return img; // skip real <img> entries
     appendLog(`🔍 resolving preload: ${img.src}`);
     try {
@@ -460,7 +461,7 @@ const renderResourcePicker = (resources) => {
       const meta = document.createElement('div');
       meta.className   = 'ri-meta';
       meta.textContent = mediaType === 'image'
-        ? (item.w > 0 ? `${item.w} × ${item.h}` : 'preload')
+        ? (item.w > 0 ? `${item.w} × ${item.h}` : item.source === 'performance' ? 'page resource' : 'preload')
         : mediaType.toUpperCase();
 
       info.appendChild(name);
@@ -812,7 +813,7 @@ async function init() {
           youtubeFormats,
           resources: GUD.universalResources
             ? {
-                images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h })),
+                images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h, source: i.source || '' })),
                 videos: (GUD.universalResources.videos || []).map(v => ({ src: v.src })),
                 pdfs:   (GUD.universalResources.pdfs   || []).map(p => ({ src: p.src })),
               }

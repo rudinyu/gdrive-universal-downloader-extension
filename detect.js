@@ -63,14 +63,64 @@
         h: img.naturalHeight || img.height,
       }));
 
-    // Also collect images declared via <link rel="preload" as="image">
-    const seenSrcs = new Set(images.map(i => i.src));
+    // Also collect images declared via <link rel="preload" as="image">.
+    // Ignore fragments for deduplication, but keep the original URL for downloads.
+    const getHttpUrl = (value) => {
+      try {
+        const parsed = new URL(value);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const normalizeSrc = (value) => {
+      try {
+        const parsed = new URL(value);
+        parsed.hash = '';
+        return parsed.href;
+      } catch {
+        return value;
+      }
+    };
+    const seenSrcs = new Set(images.map(i => normalizeSrc(i.src)));
     const preloadImages = [...document.querySelectorAll('link[rel~="preload"][as="image"]')]
       .map(link => link.href)
-      .filter(href => href && /^https?:\/\//i.test(href) && !seenSrcs.has(href))
-      .map(href => ({ type: 'image', src: href, alt: '', w: 0, h: 0 }));
+      .filter(href => {
+        const parsed = getHttpUrl(href);
+        if (!parsed) return false;
+        const key = normalizeSrc(parsed.href);
+        if (seenSrcs.has(key)) return false;
+        seenSrcs.add(key);
+        return true;
+      })
+      .map(href => ({ type: 'image', src: href, alt: '', w: 0, h: 0, source: 'preload' }));
 
-    const allImages = [...images, ...preloadImages];
+    // Canvas-based viewers can draw remote image resources without exposing
+    // them as useful DOM <img> elements. Resource Timing identifies requests
+    // initiated by images; accept only HTTP(S) URLs that look image-like.
+    const performanceImages = [];
+    const resourceEntries = typeof performance !== 'undefined' &&
+      typeof performance.getEntriesByType === 'function'
+      ? performance.getEntriesByType('resource')
+      : [];
+    const MAX_DOWNLOADS = 50; // Keep Resource Timing additions within downloader.js MAX_DOWNLOADS.
+    const remainingPerformanceImageCapacity = Math.max(
+      0,
+      MAX_DOWNLOADS - images.length - preloadImages.length
+    );
+    for (const entry of resourceEntries) {
+      if (performanceImages.length >= remainingPerformanceImageCapacity) break;
+      if (!entry || entry.initiatorType !== 'img' || typeof entry.name !== 'string') continue;
+      const parsed = getHttpUrl(entry.name);
+      if (!parsed || !(/\.(?:apng|avif|bmp|gif|jpe?g|png|svg|tiff?|webp)$/i.test(parsed.pathname) ||
+        /(?:image|photo)/i.test(`${parsed.pathname}${parsed.search}`))) continue;
+      const key = normalizeSrc(parsed.href);
+      if (seenSrcs.has(key)) continue;
+      seenSrcs.add(key);
+      performanceImages.push({ type: 'image', src: entry.name, alt: '', w: 0, h: 0, source: 'performance' });
+    }
+
+    const allImages = [...images, ...preloadImages, ...performanceImages];
 
     const videos = [...document.querySelectorAll('video')]
       .map(v => {

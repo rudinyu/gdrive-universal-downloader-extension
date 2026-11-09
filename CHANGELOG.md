@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.17] - 2026-11-09
+
+### Added
+- Detect HTTP(S) image-like requests initiated by page images through Resource Timing, allowing Canvas-based viewers such as MyPPT to expose rendered images as page resources with unknown dimensions.
+
 ## [3.7.4] - 2026-04-18
 
 ### Fixed
