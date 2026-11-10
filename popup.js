@@ -176,6 +176,36 @@ async function fetchAsBlob(url, referer, filename) {
   return { blobUrl: URL.createObjectURL(blob), filename: sanitizeFilename(filename) };
 }
 
+// Download a blob URL and revoke it once the download has ended.
+// chrome.downloads.download() resolves on initiation, and Firefox may not have
+// read the blob yet — revoking at that point fails the download.
+// Rejects if the download is interrupted.
+async function downloadBlobUrl(blobUrl, filename) {
+  const ended = new Map();
+  let onEnded = null;
+  const onChanged = (delta) => {
+    if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
+      ended.set(delta.id, delta);
+      onEnded?.();
+    }
+  };
+  // Listen before starting so a fast download can't finish unobserved.
+  chrome.downloads.onChanged.addListener(onChanged);
+  try {
+    const dlId = await chrome.downloads.download({ url: blobUrl, filename });
+    if (!ended.has(dlId)) {
+      await new Promise(resolve => { onEnded = () => { if (ended.has(dlId)) resolve(); }; });
+    }
+    const delta = ended.get(dlId);
+    if (delta.state.current === 'interrupted') {
+      throw new Error(`Download interrupted: ${delta.error?.current || 'unknown'}`);
+    }
+  } finally {
+    chrome.downloads.onChanged.removeListener(onChanged);
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
 // Shared inner logic for resolveUrlFallback (serialised, runs in world:MAIN).
 const _pageResolveFunc = async (targetUrl, origFilename) => {
   const nameFromUrl = u => {
@@ -943,16 +973,7 @@ downloadBtn.addEventListener('click', async () => {
       appendLog('🔧 Muxing...');
       const muxed   = muxYouTubeMP4(videoBuf, audioBuf);
       const blobUrl = URL.createObjectURL(new Blob([muxed], { type: 'video/mp4' }));
-      // Revoke only after download completes — chrome.downloads.download resolves on initiation,
-      // not completion, so revoking immediately risks losing the blob mid-transfer.
-      const dlId = await chrome.downloads.download({ url: blobUrl, filename });
-      chrome.downloads.onChanged.addListener(function revokeOnDone(delta) {
-        if (delta.id === dlId && delta.state &&
-            (delta.state.current === 'complete' || delta.state.current === 'interrupted')) {
-          URL.revokeObjectURL(blobUrl);
-          chrome.downloads.onChanged.removeListener(revokeOnDone);
-        }
-      });
+      await downloadBlobUrl(blobUrl, filename);
       appendLog(`✅ ${fmt.qualityLabel} MP4 saved (${totalMB} MB).`);
     } catch (err) {
       appendLog('❌ ' + (err?.message || String(err)));
@@ -1013,8 +1034,7 @@ downloadBtn.addEventListener('click', async () => {
               // Fetch as blob in popup context (CORS bypass + DNR Referer injection).
               // HTML wrappers resolved; blob URL = no network on download.
               const { blobUrl, filename } = await fetchAsBlob(item.src, referer, item.filename);
-              await chrome.downloads.download({ url: blobUrl, filename });
-              URL.revokeObjectURL(blobUrl);
+              await downloadBlobUrl(blobUrl, filename);
               appendLog(`✅ ${filename}`);
             } else if (item.type === 'video') {
               // Execute download from page context so the request carries the page's
