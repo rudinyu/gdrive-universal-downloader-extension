@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added credential fallback for cross-origin CORS rejections while preserving HTTP authorization failures.
 - Disabled automatic HLS redirects so a public playlist cannot redirect extension requests to private or local addresses.
 
+## [3.8.1] - 2026-11-12
+
+### Fixed
+- Hardened HLS fMP4 assembly by normalizing size-zero boxes and validating separate-rendition sample offsets against each media-data box.
+- Kept separate audio optional: combine compatible audio when possible, otherwise allow video-only fallback; prevent canceled jobs from reporting success.
+- Reclaim stale HLS jobs and outputs with bounded startup cleanup, and make HLS picker choices exclusive with sanitized role and path labels.
+
 ## [3.7.18] - 2026-11-10
 
 ### Fixed

@@ -186,7 +186,7 @@
     const label = variant.resolution ? `${variant.resolution.split('x')[1]}p` : 'Variant';
     const bitrate = variant.bandwidth ? ` · ${(variant.bandwidth / 1000000).toFixed(1)} Mb/s` : '';
     const reason = Core.variantUnsupportedReason(variant);
-    const audio = variant.separateAudio ? ' · separate AAC audio' : variant.audioGroupError ? ' · audio selection unavailable' : '';
+    const audio = variant.separateAudio ? ' · separate audio available' : variant.audioGroupError ? ' · audio selection unavailable' : '';
     return `${label}${bitrate}${audio}${reason ? ` — ${reason}` : ''}`;
   };
 
@@ -299,6 +299,7 @@
 
   const finishDownload = async (blob, filename, signal) => {
     if (!Platform?.downloads?.download) throw new Core.HlsError('Browser downloads are unavailable.', 'HLS_DOWNLOAD');
+    assertNotCancelled(signal);
     const objectUrl = URL.createObjectURL(blob);
     const finished = new Map();
     let resolveEnd;
@@ -306,6 +307,9 @@
     let timeout = null;
     let settled = false;
     const ended = new Promise((resolve, reject) => { resolveEnd = resolve; rejectEnd = reject; });
+    // The downloads API can stay pending after abort. Keep its eventual
+    // rejection observed until the API resolves and the caller reaches await.
+    void ended.catch(() => {});
     const settle = (error) => {
       if (settled) return;
       settled = true;
@@ -331,6 +335,11 @@
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
       activeDownloadId = await Platform.downloads.download({ url: objectUrl, filename, saveAs: false });
+      if (signal?.aborted) {
+        await Platform.downloads.cancel(activeDownloadId).catch(() => {});
+        assertNotCancelled(signal);
+      }
+      assertNotCancelled(signal);
       if (finished.has(activeDownloadId)) {
         const delta = finished.get(activeDownloadId);
         if (delta.state.current === 'complete') settle();
@@ -338,6 +347,7 @@
       } else {
         try {
           const [item] = await Platform.downloads.search({ id: activeDownloadId });
+          assertNotCancelled(signal);
           if (item?.state === 'complete') settle();
           else if (item?.state === 'interrupted') settle(new Core.HlsError('The browser interrupted the file download.', 'HLS_DOWNLOAD'));
         } catch { /* onChanged remains the completion signal */ }
@@ -357,6 +367,7 @@
     if (busy) return;
     busy = true;
     let completed = false;
+    let heartbeatTimer = null;
     startBtn.disabled = true;
     cancelBtn.classList.remove('hidden');
     cancelBtn.disabled = false;
@@ -369,12 +380,18 @@
     const signal = controller.signal;
     try {
       await Storage.deleteJob(jobId);
+      assertNotCancelled(signal);
       await Storage.putJob({ ...job, status: 'running', startedAt: Date.now() });
+      assertNotCancelled(signal);
+      heartbeatTimer = window.setInterval(() => {
+        void Storage.updateJob(jobId, { heartbeatAt: Date.now() }).catch(() => {});
+      }, 60 * 1000);
       const outputLimits = {
         fallbackMaxBytes: Core.LIMITS.MAX_OUTPUT_BYTES,
         opfsMaxBytes: Core.LIMITS.MAX_OPFS_OUTPUT_BYTES,
       };
       let outputSession = await Storage.createOutput(jobId, outputLimits);
+      assertNotCancelled(signal);
       const canFallBackToVideo = error => !signal.aborted && error?.name !== 'QuotaExceededError' &&
         !['HLS_CANCELLED', 'HLS_PERMISSION', 'HLS_QUOTA', 'HLS_STORAGE'].includes(error?.code);
       const recordAudioFailure = error => {
@@ -390,6 +407,7 @@
         const variant = selectedVariant?.[index];
         if (!variant || Core.variantUnsupportedReason(variant)) throw new Core.HlsError('Choose a supported video variant.', 'HLS_UNSUPPORTED');
         const prepared = await preparePlaylist(variant.url, signal);
+        assertNotCancelled(signal);
         media = prepared.playlist;
         const hasNestedAudioSelection = !!prepared.audioPlaylist || !!prepared.audioError;
         if (prepared.audioError) recordAudioFailure(prepared.audioError);
@@ -401,6 +419,7 @@
           } else {
             try { audioMedia = await prepareAudioPlaylist(variant.audioRendition.url, signal); }
             catch (error) { recordAudioFailure(error); }
+            assertNotCancelled(signal);
           }
         }
       }
@@ -408,8 +427,12 @@
       let totalSegments = media.segments.length + (audioMedia?.segments.length || 0);
       const resetOutput = async () => {
         await Storage.deleteJob(jobId);
+        assertNotCancelled(signal);
         await Storage.putJob({ ...job, status: 'running', startedAt: Date.now() });
-        return Storage.createOutput(jobId, outputLimits);
+        assertNotCancelled(signal);
+        const session = await Storage.createOutput(jobId, outputLimits);
+        assertNotCancelled(signal);
+        return session;
       };
       if (audioFallbackReason) {
         totalSegments = media.segments.length;
@@ -457,6 +480,7 @@
       assertNotCancelled(signal);
       setStatus('Validating MP4 fragments…');
       const output = await Storage.finishOutput(jobId);
+      assertNotCancelled(signal);
       if (output.size !== result.bytes || output.size <= 0) throw new Core.HlsError('Saved MP4 size does not match its validated output.', 'HLS_INVALID_OUTPUT');
       const blob = output.kind === 'opfs'
         ? output.file.slice(0, output.file.size, 'video/mp4')
@@ -465,9 +489,14 @@
       const isVideoOnly = result.hasAudio !== true;
       const outputFilename = sanitizeOutputFilename(filenameInput.value, job.title, isVideoOnly);
       filenameInput.value = outputFilename;
+      assertNotCancelled(signal);
       await finishDownload(blob, outputFilename, signal);
+      assertNotCancelled(signal);
       await Storage.deleteJob(jobId);
+      assertNotCancelled(signal);
       completed = true;
+      controller = null;
+      cancelBtn.disabled = true;
       progress.value = 100;
       if (isVideoOnly) {
         setStatus('Video-only MP4 download completed. No audio track was included.', 'ok');
@@ -495,6 +524,7 @@
         await Storage.deleteJob(jobId).catch(() => {});
       }
     } finally {
+      if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
       await clearRefererRules();
       busy = false;
       cancelBtn.classList.add('hidden');

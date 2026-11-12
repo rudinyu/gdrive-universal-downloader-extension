@@ -212,6 +212,13 @@ describe('HLS playlist parsing and support boundaries', () => {
     expect(Core.variantUnsupportedReason({ codecs: 'avc1.4d401f,mp4a.40.2' })).toBe('');
   });
 
+  test('keeps external audio codec metadata optional while retaining non-AVC video checks', () => {
+    expect(Core.variantUnsupportedReason({ codecs: 'avc1.4d401f,ac-3', separateAudio: true })).toBe('');
+    expect(Core.variantUnsupportedReason({ codecs: '', separateAudio: true })).toBe('');
+    expect(Core.variantUnsupportedReason({ codecs: 'hvc1.1.6.L93.B0,ec-3', separateAudio: true }))
+      .toMatch(/video codec is not supported/i);
+  });
+
   test('resolves relative media and initialization URLs and parses explicit plus implicit byte ranges', () => {
     const playlist = Core.parseMediaPlaylist(mediaText([
       '#EXT-X-MAP:URI="container.mp4",BYTERANGE="16@0"',
@@ -488,6 +495,43 @@ describe('bounded HLS media processing', () => {
     expect(decodeTimes.some(time => time >= 58 * 396900)).toBe(true);
   });
 
+  test('normalizes size-zero initialization and media boxes before concatenating fMP4 output', async () => {
+    const muxjs = createMux();
+    const transmuxer = new muxjs.mp4.Transmuxer();
+    const events = [];
+    transmuxer.on('data', segment => events.push(segment));
+    transmuxer.push(fixture.slice());
+    transmuxer.flush();
+    const init = new Uint8Array(events[0].initSegment).slice();
+    const media = new Uint8Array(events[0].data).slice();
+    const initMoov = Core.readMp4Boxes(init).find(box => box.type === 'moov');
+    const mediaMdat = Core.readMp4Boxes(media).find(box => box.type === 'mdat');
+    new DataView(init.buffer, init.byteOffset, init.byteLength).setUint32(initMoov.offset, 0, false);
+    new DataView(media.buffer, media.byteOffset, media.byteLength).setUint32(mediaMdat.offset, 0, false);
+    const playlist = Core.parseMediaPlaylist([
+      '#EXTM3U',
+      '#EXT-X-MAP:URI="init.mp4"',
+      '#EXTINF:1,', 'one.m4s',
+      '#EXTINF:1,', 'two.m4s',
+      '#EXT-X-ENDLIST',
+    ].join('\n'), 'https://cdn.example/index.m3u8');
+    const output = [];
+
+    await Core.downloadMediaPlaylist(playlist, {
+      fetchBytes: async url => url.endsWith('init.mp4') ? init.slice() : media.slice(),
+      appendChunk: async bytes => output.push(bytes.slice()),
+    });
+
+    const combinedBoxes = Core.readMp4Boxes(concat(output));
+    expect(new DataView(output[0].buffer, output[0].byteOffset, output[0].byteLength).getUint32(initMoov.offset, false))
+      .toBe(initMoov.size);
+    expect(output.slice(1).every(chunk => {
+      const mdat = Core.readMp4Boxes(chunk).find(box => box.type === 'mdat');
+      return mdat && new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getUint32(mdat.offset, false) === mdat.size;
+    })).toBe(true);
+    expect(combinedBoxes.map(box => box.type)).toEqual(['ftyp', 'moov', 'moof', 'mdat', 'moof', 'mdat']);
+  });
+
   test('combines independent AVC video and AAC fMP4 playlists with distinct remapped tracks', async () => {
     const readFixture = name => new Uint8Array(fs.readFileSync(path.join(separateAvFixtureDir, name)));
     const video = Core.parseMediaPlaylist(fs.readFileSync(path.join(separateAvFixtureDir, 'video.m3u8'), 'utf8'),
@@ -555,6 +599,73 @@ describe('bounded HLS media processing', () => {
     expect(times).toEqual([...times].sort((left, right) => left - right));
     expect(output).toHaveLength(8);
     expect(offset).toBe(result.bytes);
+  });
+
+  test('normalizes a size-zero separate-rendition mdat and keeps later fragments visible', async () => {
+    const readFixture = name => new Uint8Array(fs.readFileSync(path.join(separateAvFixtureDir, name)));
+    const video = Core.parseMediaPlaylist(fs.readFileSync(path.join(separateAvFixtureDir, 'video.m3u8'), 'utf8'),
+      'https://fixture.example/video.m3u8');
+    const audio = Core.parseMediaPlaylist(fs.readFileSync(path.join(separateAvFixtureDir, 'audio.m3u8'), 'utf8'),
+      'https://fixture.example/audio.m3u8');
+    const output = [];
+
+    await Core.downloadSeparateFmp4Playlists(video, audio, {
+      fetchBytes: async url => {
+        const filename = new URL(url).pathname.split('/').pop();
+        const bytes = readFixture(filename);
+        if (filename === 'audio-00.m4s') {
+          const mdat = Core.readMp4Boxes(bytes).find(box => box.type === 'mdat');
+          new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(mdat.offset, 0, false);
+        }
+        return bytes;
+      },
+      appendChunk: async bytes => output.push(bytes.slice()),
+    });
+
+    expect(Core.readMp4Boxes(concat(output)).filter(box => box.type === 'mdat')).toHaveLength(7);
+    expect(output.slice(1).every(chunk => {
+      const mdat = Core.readMp4Boxes(chunk).find(box => box.type === 'mdat');
+      return mdat && new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getUint32(mdat.offset, false) === mdat.size;
+    })).toBe(true);
+  });
+
+  test.each([
+    ['audio', true],
+    ['video', false],
+  ])('rejects an out-of-range %s trun data offset with rendition-specific fallback', async (rendition, shouldFallback) => {
+    const readFixture = name => new Uint8Array(fs.readFileSync(path.join(separateAvFixtureDir, name)));
+    const video = Core.parseMediaPlaylist(fs.readFileSync(path.join(separateAvFixtureDir, 'video.m3u8'), 'utf8'),
+      'https://fixture.example/video.m3u8');
+    const audio = Core.parseMediaPlaylist(fs.readFileSync(path.join(separateAvFixtureDir, 'audio.m3u8'), 'utf8'),
+      'https://fixture.example/audio.m3u8');
+    const corruptedFile = `${rendition}-00.m4s`;
+    let caught;
+
+    try {
+      await Core.downloadSeparateFmp4Playlists(video, audio, {
+        fetchBytes: async url => {
+          const filename = new URL(url).pathname.split('/').pop();
+          const bytes = readFixture(filename);
+          if (filename === corruptedFile) {
+            const top = Core.readMp4Boxes(bytes);
+            const moof = top.find(box => box.type === 'moof');
+            const moofChildren = readChildBoxes(bytes, moof);
+            const traf = moofChildren.find(box => box.type === 'traf');
+            const trun = readChildBoxes(bytes, traf).find(box => box.type === 'trun');
+            new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+              .setInt32(trun.offset + trun.headerSize + 8, 0x7fffffff, false);
+          }
+          return bytes;
+        },
+        appendChunk: jest.fn(async () => {}),
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ code: 'HLS_UNSUPPORTED' });
+    if (shouldFallback) expect(caught.hlsAudioFallback).toBe(true);
+    else expect(caught.hlsAudioFallback).toBeUndefined();
   });
 
   test('marks audio-rendition transfer errors as video-only fallback candidates', async () => {

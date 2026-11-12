@@ -377,7 +377,7 @@ test('automatically downloads a separate fMP4 audio rendition into the same MP4'
     expect(harness.downloadSpy).not.toHaveBeenCalled();
     expect(harness.separateDownloadSpy.mock.calls[0][0].segments).toHaveLength(2);
     expect(harness.separateDownloadSpy.mock.calls[0][1].segments).toHaveLength(3);
-    expect(document.getElementById('variantSelect').options[0].textContent).toContain('separate AAC audio');
+    expect(document.getElementById('variantSelect').options[0].textContent).toContain('separate audio available');
     document.getElementById('startBtn').click();
     expect(harness.separateDownloadSpy).toHaveBeenCalledTimes(1);
     releaseDownload();
@@ -572,6 +572,56 @@ test('does not fall back to video after cancellation during separate-audio downl
   }
 });
 
+test('does not dispatch a finalized OPFS output when cancellation happens during finalization', async () => {
+  const jobId = '123e4567-e89b-12d3-a456-426614174030';
+  const playlistUrl = 'https://cdn.example/index.m3u8';
+  const playlists = new Map([[playlistUrl, ['#EXTM3U', '#EXTINF:1,', 'segment.ts', '#EXT-X-ENDLIST'].join('\n')]]);
+  let resolveFinish;
+  const harness = mountHlsPage({
+    jobId,
+    playlistUrl,
+    playlists,
+    downloadImpl: async (playlist, options) => {
+      await options.appendChunk(new Uint8Array([1, 2, 3]), 0);
+      return { bytes: 3, segments: playlist.segments.length, mediaSegments: 1, container: 'ts', hasAudio: true };
+    },
+  });
+  harness.storage.finishOutput.mockImplementation(() => new Promise(resolve => { resolveFinish = resolve; }));
+
+  try {
+    await waitFor(() => typeof resolveFinish === 'function');
+    document.getElementById('cancelBtn').click();
+    resolveFinish({ kind: 'opfs', size: 3, file: new Blob([new Uint8Array([1, 2, 3])]) });
+    await waitFor(() => document.getElementById('status').textContent === 'Download cancelled.');
+
+    expect(harness.platform.downloads.download).not.toHaveBeenCalled();
+    expect(document.getElementById('status').textContent).not.toContain('completed');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('cancels a native browser download when its ID resolves after abort', async () => {
+  const jobId = '123e4567-e89b-12d3-a456-426614174031';
+  const playlistUrl = 'https://cdn.example/index.m3u8';
+  const playlists = new Map([[playlistUrl, ['#EXTM3U', '#EXTINF:1,', 'segment.ts', '#EXT-X-ENDLIST'].join('\n')]]);
+  let resolveDownload;
+  const harness = mountHlsPage({ jobId, playlistUrl, playlists });
+  harness.platform.downloads.download.mockImplementation(() => new Promise(resolve => { resolveDownload = resolve; }));
+
+  try {
+    await waitFor(() => typeof resolveDownload === 'function');
+    document.getElementById('cancelBtn').click();
+    resolveDownload(81);
+    await waitFor(() => document.getElementById('status').textContent === 'Download cancelled.');
+
+    expect(harness.platform.downloads.cancel).toHaveBeenCalledWith(81);
+    expect(document.getElementById('status').textContent).not.toContain('completed');
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test('waits for explicit start when a separate-audio master uses manual selection mode', async () => {
   const jobId = '123e4567-e89b-12d3-a456-426614174021';
   const masterUrl = 'https://cdn.example/master.m3u8';
@@ -635,6 +685,43 @@ test('falls back to a valid video-only TS playlist when separate audio is incomp
   try {
     await waitFor(() => harness.savedOptions.length === 1);
 
+    expect(harness.requests.map(request => request.url)).toEqual([masterUrl, videoUrl, audioUrl]);
+    expect(harness.separateDownloadSpy).not.toHaveBeenCalled();
+    expect(harness.downloadSpy).toHaveBeenCalledTimes(1);
+    expect(harness.savedOptions[0].filename).toBe('Stream title-no音訊.mp4');
+    expect(document.getElementById('status').textContent).toContain('No audio track was included');
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test('continues video-only when CODECS is omitted for an optional external audio rendition', async () => {
+  const jobId = '123e4567-e89b-12d3-a456-426614174032';
+  const masterUrl = 'https://cdn.example/master.m3u8';
+  const videoUrl = 'https://cdn.example/video.m3u8';
+  const audioUrl = 'https://cdn.example/audio.m3u8';
+  const playlists = new Map([
+    [masterUrl, [
+      '#EXTM3U',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="English",DEFAULT=YES,URI="audio.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1200000,AUDIO="audio"',
+      'video.m3u8',
+    ].join('\n')],
+    [videoUrl, ['#EXTM3U', '#EXTINF:1,', 'v.ts', '#EXT-X-ENDLIST'].join('\n')],
+    [audioUrl, ['#EXTM3U', '#EXTINF:1,', 'a.ts', '#EXT-X-ENDLIST'].join('\n')],
+  ]);
+  const harness = mountHlsPage({
+    jobId,
+    playlistUrl: masterUrl,
+    playlists,
+    downloadImpl: async (playlist, options) => {
+      await options.appendChunk(new Uint8Array([1, 2, 3]), 0);
+      return { bytes: 3, segments: playlist.segments.length, mediaSegments: 1, container: playlist.container, hasAudio: false };
+    },
+  });
+
+  try {
+    await waitFor(() => harness.savedOptions.length === 1);
     expect(harness.requests.map(request => request.url)).toEqual([masterUrl, videoUrl, audioUrl]);
     expect(harness.separateDownloadSpy).not.toHaveBeenCalled();
     expect(harness.downloadSpy).toHaveBeenCalledTimes(1);

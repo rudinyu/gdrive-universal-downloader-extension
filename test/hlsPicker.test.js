@@ -56,6 +56,7 @@ test('shows HLS beside existing universal resources without changing their defau
   expect(items.slice(0, 3).every(item => item.querySelector('input').checked)).toBe(true);
   expect(items[3].querySelector('input').checked).toBe(false);
   expect(document.getElementById('hlsPickerHint').style.display).toBe('block');
+  expect(document.getElementById('resourceList').textContent).toContain('/…/…/index.m3u8');
   expect(document.getElementById('resourceList').textContent).not.toContain('private/path');
   expect(document.getElementById('resourceList').textContent).not.toContain('secret');
 });
@@ -66,11 +67,44 @@ test('preselects HLS when it is the only resource type', () => {
     images: [],
     videos: [],
     pdfs: [],
-    hls: [{ src: 'https://cdn.example/index.m3u8' }],
+    hls: [
+      { src: 'https://cdn.example/hls/master.m3u8?sig=master-secret' },
+      { src: 'https://cdn.example/hls/video/720p.m3u8?sig=video-secret' },
+      { src: 'https://cdn.example/hls/audio/en.m3u8?sig=audio-secret' },
+    ],
   });
 
-  const item = document.querySelector('.resource-item');
-  expect(item.dataset.type).toBe('hls');
-  expect(item.querySelector('input').checked).toBe(true);
+  const items = [...document.querySelectorAll('.resource-item')];
+  expect(items.map(item => item.querySelector('input').checked)).toEqual([true, false, false]);
+  expect(items.map(item => item.querySelector('.ri-meta').textContent)).toEqual([
+    'Master playlist · cdn.example · /hls/master.m3u8',
+    'Video playlist · cdn.example · /hls/video/720p.m3u8',
+    'Audio rendition · cdn.example · /hls/audio/en.m3u8',
+  ]);
+  expect(document.getElementById('resourceList').textContent).not.toContain('master-secret');
+  expect(document.getElementById('resourceList').textContent).not.toContain('video-secret');
+  expect(document.getElementById('resourceList').textContent).not.toContain('audio-secret');
   expect(document.getElementById('hlsPickerHint').style.display).toBe('block');
+});
+
+test('keeps one HLS choice exclusive from other HLS and media selections', () => {
+  const picker = makePicker();
+  picker.renderResourcePicker({
+    images: [{ src: 'https://site.example/photo.jpg', w: 200, h: 100 }],
+    videos: [],
+    pdfs: [],
+    hls: [
+      { src: 'https://cdn.example/master.m3u8' },
+      { src: 'https://cdn.example/audio/en.m3u8' },
+    ],
+  });
+  const items = [...document.querySelectorAll('.resource-item')];
+  const [image, master, audio] = items;
+
+  master.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  expect(items.map(item => item.querySelector('input').checked)).toEqual([false, true, false]);
+  audio.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  expect(items.map(item => item.querySelector('input').checked)).toEqual([false, false, true]);
+  image.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  expect(items.map(item => item.querySelector('input').checked)).toEqual([true, false, false]);
 });
