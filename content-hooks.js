@@ -8,6 +8,7 @@
   window.__gdriveUniversalDownloader = {
     hooksInstalled: true,
     capturedVideoURLs: new Set(),
+    capturedHlsURLs: new Set(),
     log: [],
     recording: false,
     settings: {},
@@ -25,9 +26,17 @@
   ];
 
   const isVideoURL = url => VIDEO_PATTERNS.some(p => p.test(url));
+  const isHlsURL = url => /\.m3u8(?:$|[?#])/i.test(url);
   const recordURL  = url => {
-    if (url && typeof url === 'string' && /^https?:\/\//i.test(url) && isVideoURL(url))
-      window.__gdriveUniversalDownloader.capturedVideoURLs.add(url);
+    const value = typeof url === 'string' ? url : typeof url?.url === 'string' ? url.url : typeof url?.href === 'string' ? url.href : '';
+    if (!value) return;
+    let resolved;
+    try { resolved = new URL(value, location.href); } catch { return; }
+    if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return;
+    const absoluteURL = resolved.href;
+    const GUD = window.__gdriveUniversalDownloader;
+    if (isHlsURL(absoluteURL) && GUD.capturedHlsURLs.size < 20) GUD.capturedHlsURLs.add(absoluteURL);
+    if (isVideoURL(absoluteURL) && GUD.capturedVideoURLs.size < 100) GUD.capturedVideoURLs.add(absoluteURL);
   };
 
   // Skip XHR/fetch hooks on YouTube — it uses ytInitialPlayerResponse instead

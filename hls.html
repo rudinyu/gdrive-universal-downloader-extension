@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HLS Downloader</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #101526; color: #e6e9f2; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(720px, calc(100% - 32px)); margin: 40px auto; padding: 24px; border: 1px solid #29334f; border-radius: 14px; background: #171f34; box-shadow: 0 18px 56px #0005; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    p { margin: 8px 0; color: #aab5d0; }
+    .source { margin: 18px 0; padding: 12px; border-radius: 8px; background: #0e1424; color: #9fb2dc; }
+    label { display: block; margin: 18px 0 6px; color: #c3cce0; font-weight: 600; }
+    select { width: 100%; padding: 10px; border: 1px solid #3b4868; border-radius: 7px; background: #0e1424; color: #e6e9f2; font: inherit; }
+    input[type="text"] { width: 100%; padding: 10px; border: 1px solid #3b4868; border-radius: 7px; background: #0e1424; color: #e6e9f2; font: inherit; }
+    input[type="text"]:disabled { opacity: .6; }
+    .actions { display: flex; gap: 10px; margin-top: 18px; }
+    button { min-height: 40px; padding: 9px 16px; border: 0; border-radius: 8px; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    #startBtn { background: #4969d8; }
+    #cancelBtn { background: #aa3838; }
+    progress { display: block; width: 100%; height: 12px; margin: 20px 0 6px; accent-color: #6684f0; }
+    #progressLabel { color: #b8c4e0; font-size: 13px; }
+    #status { min-height: 24px; margin-top: 12px; color: #d5dcf0; }
+    #status.error { color: #ff9e9e; }
+    #status.ok { color: #8bdaa0; }
+    .note { margin-top: 22px; padding: 12px; border-left: 3px solid #ce9b3d; background: #282315; color: #e2ca9a; font-size: 12px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HLS video download</h1>
+    <p>This job runs in its own tab, so the extension popup can close. By default, it starts automatically with the highest supported quality and page-title filename; choose options in the popup to use manual controls here.</p>
+    <div class="source" id="sourceLabel">Preparing the selected playlist…</div>
+    <section id="variantSection" class="hidden">
+      <label for="variantSelect">Video quality</label>
+      <select id="variantSelect"></select>
+    </section>
+    <label for="concurrencySelect">Parallel segment downloads</label>
+    <select id="concurrencySelect">
+      <option value="1">1 segment at a time</option>
+      <option value="2">2 segments at a time</option>
+      <option value="3">3 segments at a time</option>
+      <option value="4" selected>4 segments at a time</option>
+    </select>
+    <label for="filenameInput">Output filename</label>
+    <input id="filenameInput" type="text" maxlength="180" autocomplete="off" spellcheck="false">
+    <div class="actions">
+      <button id="startBtn" disabled>Start download</button>
+      <button id="cancelBtn" class="hidden">Cancel</button>
+    </div>
+    <progress id="progress" max="100" value="0" class="hidden"></progress>
+    <div id="progressLabel"></div>
+    <div id="status" role="status" aria-live="polite">Loading playlist…</div>
+    <div class="note">Only finished, unencrypted HLS playlists are supported. DRM, encryption, separate audio tracks, redirects, and some codec or playlist features are rejected. Access can still be blocked by the site or CDN’s CORS, cookie, or referer rules; keep this tab open until the download finishes.</div>
+  </main>
+  <script src="lib/mux.js"></script>
+  <script src="hls-core.js"></script>
+  <script src="hls-storage.js"></script>
+  <script src="hls-platform.js"></script>
+  <script src="hls-page.js"></script>
+</body>
+</html>

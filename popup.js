@@ -8,6 +8,7 @@ const TYPE_META = {
   'gforms':      { icon: '📋', label: 'Google Forms',     pdf: false },
   'gdrawings':   { icon: '🎨', label: 'Google Drawings',  pdf: false },
   'video':       { icon: '🎬', label: 'Video',            pdf: false, video: true },
+  'hls':         { icon: '📡', label: 'HLS Stream',       pdf: false },
   'audio':       { icon: '🎵', label: 'Audio',            pdf: false },
   'image':       { icon: '🖼️',  label: 'Image',            pdf: false },
   'text':        { icon: '📃', label: 'Text File',        pdf: false },
@@ -23,6 +24,8 @@ const videoNote      = document.getElementById('videoNote');
 const youtubeFormatPicker = document.getElementById('youtubeFormatPicker');
 const youtubeFormatList   = document.getElementById('youtubeFormatList');
 const youtubeFormatLabel  = document.getElementById('youtubeFormatLabel');
+const hlsPickerHint = document.getElementById('hlsPickerHint');
+const hlsManualOptions = document.getElementById('hlsManualOptions');
 const resourcePicker = document.getElementById('resourcePicker');
 const resourceList   = document.getElementById('resourceList');
 const resourceCount  = document.getElementById('resourceCount');
@@ -42,6 +45,7 @@ const unsupportedContent = document.getElementById('unsupportedContent');
 
 let currentTabId          = null;
 let currentTabUrl         = null;
+let currentPageTitle      = 'video';
 let currentType           = 'unknown';
 let _ruleId               = 1000;
 let pollInterval          = null;
@@ -326,7 +330,7 @@ const appendLog = (msg) => {
 const setBtnState = (running) => {
   downloadBtn.disabled = running;
   btnIcon.textContent  = running ? '⏳' : '⬇';
-  if (!running && currentType === 'universal') {
+  if (!running && (currentType === 'universal' || currentType === 'hls')) {
     updateResourceCount(); // restore "Download (N)" label
   } else {
     btnText.textContent = running ? 'Running...' : 'Download';
@@ -391,7 +395,7 @@ const startPolling = (tabId) => {
 
 // ── Universal resource picker ────────────────────────────────────
 const getFilenameFromUrl = (src, mediaType, index) => {
-  const fallback = `${mediaType}-${index + 1}.${{ image: 'jpg', video: 'mp4', pdf: 'pdf' }[mediaType] || 'bin'}`;
+  const fallback = `${mediaType}-${index + 1}.${{ image: 'jpg', video: 'mp4', pdf: 'pdf', hls: 'm3u8' }[mediaType] || 'bin'}`;
   try {
     const parts = new URL(src).pathname.split('/');
     const name  = decodeURIComponent(parts[parts.length - 1] || '');
@@ -453,8 +457,10 @@ const resolvePreloadImages = async (images) => {
 const renderResourcePicker = (resources) => {
   resourcePicker.style.display = 'block';
   resourceList.innerHTML = '';
+  hlsPickerHint.style.display = resources.hls?.length ? 'block' : 'none';
+  const hasOtherResourceTypes = !!(resources.images?.length || resources.videos?.length || resources.pdfs?.length);
 
-  const ICONS = { image: '🖼️', video: '🎬', pdf: '📄' };
+  const ICONS = { image: '🖼️', video: '🎬', pdf: '📄', hls: '📡' };
 
   const renderSection = (items, mediaType, title) => {
     if (items.length === 0) return;
@@ -464,7 +470,7 @@ const renderResourcePicker = (resources) => {
     resourceList.appendChild(header);
 
     items.forEach((item, i) => {
-      const filename = getFilenameFromUrl(item.src, mediaType, i);
+      const filename = mediaType === 'hls' ? `HLS playlist ${i + 1}.m3u8` : getFilenameFromUrl(item.src, mediaType, i);
       const div = document.createElement('div');
       div.className   = 'resource-item';
       div.dataset.src      = item.src;
@@ -474,7 +480,7 @@ const renderResourcePicker = (resources) => {
 
       const cb = document.createElement('input');
       cb.type    = 'checkbox';
-      cb.checked = true;
+      cb.checked = mediaType !== 'hls' || !hasOtherResourceTypes;
 
       const icon = document.createElement('span');
       icon.className   = 'ri-icon';
@@ -486,13 +492,21 @@ const renderResourcePicker = (resources) => {
       const name = document.createElement('div');
       name.className   = 'ri-name';
       name.textContent = filename;
-      name.title       = item.src;
+      // Signed HLS playlist URLs may carry short-lived access tokens. Keep the
+      // URL in the item data for the download action, but don't expose it in a
+      // hover tooltip or other visible UI.
+      name.title       = mediaType === 'hls' ? filename : item.src;
 
       const meta = document.createElement('div');
       meta.className   = 'ri-meta';
-      meta.textContent = mediaType === 'image'
-        ? (item.w > 0 ? `${item.w} × ${item.h}` : item.source === 'performance' ? 'page resource' : 'preload')
-        : mediaType.toUpperCase();
+      if (mediaType === 'image') {
+        meta.textContent = item.w > 0 ? `${item.w} × ${item.h}` : item.source === 'performance' ? 'page resource' : 'preload';
+      } else if (mediaType === 'hls') {
+        try { meta.textContent = `HLS playlist · ${new URL(item.src).hostname}`; }
+        catch { meta.textContent = 'HLS playlist'; }
+      } else {
+        meta.textContent = mediaType.toUpperCase();
+      }
 
       info.appendChild(name);
       info.appendChild(meta);
@@ -511,6 +525,7 @@ const renderResourcePicker = (resources) => {
   renderSection(resources.images, 'image', 'Images');
   renderSection(resources.videos, 'video', 'Videos');
   renderSection(resources.pdfs,   'pdf',   'PDFs');
+  renderSection(resources.hls || [], 'hls', 'HLS playlists');
   updateResourceCount();
 };
 
@@ -838,6 +853,7 @@ async function init() {
         }
         return {
           type: GUD.detectedType || 'unknown',
+          pageTitle: document.title || 'video',
           recording: !!GUD.recording,
           log: GUD.log || [],
           youtubeFormats,
@@ -846,6 +862,7 @@ async function init() {
                 images: (GUD.universalResources.images || []).map(i => ({ src: i.src, alt: i.alt, w: i.w, h: i.h, source: i.source || '' })),
                 videos: (GUD.universalResources.videos || []).map(v => ({ src: v.src })),
                 pdfs:   (GUD.universalResources.pdfs   || []).map(p => ({ src: p.src })),
+                hls:    (GUD.universalResources.hls    || []).map(h => ({ src: h.src })),
               }
             : null,
         };
@@ -856,8 +873,9 @@ async function init() {
       throw new Error('Could not retrieve detection results');
     }
 
-    const { type, resources, recording, log, youtubeFormats } = results[0].result || {};
+    const { type, resources, recording, log, youtubeFormats, pageTitle } = results[0].result || {};
     currentType = type || 'unknown';
+    currentPageTitle = pageTitle || 'video';
     
     // Restore log if any
     if (log && log.length > 0) {
@@ -910,6 +928,50 @@ selectNoneBtn.addEventListener('click', () => {
 
 downloadBtn.addEventListener('click', async () => {
   if (!currentTabId) return;
+
+  // HLS transfers can outlive this action popup. Persist the signed playlist
+  // URL in extension-local IndexedDB and pass only a random job ID in the tab URL.
+  const checkedResourceItems = [...resourceList.querySelectorAll('.resource-item')].filter(div =>
+    div.querySelector('input[type="checkbox"]')?.checked
+  );
+  const selectedHlsItems = checkedResourceItems.filter(div => div.dataset.type === 'hls');
+  if (selectedHlsItems.length > 0 || currentType === 'hls') {
+    if (selectedHlsItems.length !== 1 || checkedResourceItems.length !== 1) {
+      appendLog(selectedHlsItems.length === 0
+        ? '⚠️ Select one HLS playlist to download.'
+        : '⚠️ Select one HLS playlist by itself, or clear it to download other selected resources.');
+      return;
+    }
+    const playlistUrl = selectedHlsItems[0].dataset.src;
+    const platform = window.GUDHlsPlatform;
+    if (!playlistUrl || !platform?.storage) return;
+    setBtnState(true);
+    try {
+      let pageReferer = '';
+      try { pageReferer = new URL(getSafeReferer(currentTabUrl)).origin + '/'; } catch { /* omit unsafe referers */ }
+      const jobId = crypto.randomUUID();
+      await platform.storage.putJob({
+        id: jobId,
+        playlistUrl,
+        autoStart: !hlsManualOptions?.checked,
+        referer: pageReferer,
+        title: sanitizeFilename(currentPageTitle || 'video', 'video').replace(/\.[a-z0-9]{2,5}$/i, ''),
+        createdAt: Date.now(),
+        status: 'queued',
+      });
+      try {
+        await platform.tabs.createExtensionPage(`hls.html?job=${encodeURIComponent(jobId)}`);
+      } catch (error) {
+        await platform.storage.deleteJob(jobId).catch(() => {});
+        throw error;
+      }
+      appendLog('▶ HLS job opened in a separate tab. Keep that tab open until the MP4 is saved.');
+    } catch (error) {
+      appendLog(`❌ Could not start HLS download: ${error?.message || 'extension storage or tab creation failed'}`);
+    }
+    setBtnState(false);
+    return;
+  }
 
   // ── YouTube direct downloads (video-only or progressive with audio) ─
   if (currentType === 'video' && (selectedYoutubeFormat?.type === 'direct' || selectedYoutubeFormat?.type === 'progressive')) {
