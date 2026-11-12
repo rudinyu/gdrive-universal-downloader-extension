@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-11-12
+
+### Added
+- Added HLS VOD detection and a resource-picker workflow that starts the highest supported quality automatically by default, with an opt-out for manual quality and filename selection.
+- Added bounded TS-to-fMP4 remuxing and compatible fMP4 assembly in a dedicated tab, with IndexedDB job handoff so the task survives popup closure; output streams to OPFS (4 GiB cap) or uses a bounded IndexedDB fallback (192 MiB cap), and segment concurrency is selectable from one to four.
+- Added no-transcode merging for compatible fMP4 HLS variants with one separate AVC video track and one AAC audio track, including track-ID remapping and decode-time ordering.
+- Added a safe video-only fallback when a separate audio rendition cannot be used; files without an audio track are named with `-no音訊.mp4` and clearly reported in the download tab.
+- Added shared Chrome MV3 and Firefox WebExtension adapters for HLS networking, host access, downloads, and extension-tab lifecycle.
+- Added credential fallback for cross-origin CORS rejections while preserving HTTP authorization failures.
+- Disabled automatic HLS redirects so a public playlist cannot redirect extension requests to private or local addresses.
+
 ## [3.7.18] - 2026-11-10
 
 ### Fixed

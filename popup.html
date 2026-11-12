@@ -62,6 +62,7 @@
     .type-badge.gforms     { background: #3a2a1a; color: #ffcc80; border: 1px solid #7a5a20; }
     .type-badge.gdrawings  { background: #2a1a3a; color: #ce93d8; border: 1px solid #5a2d7a; }
     .type-badge.video      { background: #3a1a1a; color: #ff8a80; border: 1px solid #7a2d2d; }
+    .type-badge.hls        { background: #2e1a3a; color: #d9a0ff; border: 1px solid #613b79; }
     .type-badge.audio      { background: #1a2a3a; color: #80cbc4; border: 1px solid #2d5a7a; }
     .type-badge.image      { background: #3a2a1a; color: #ffe082; border: 1px solid #7a5a20; }
     .type-badge.file-export{ background: #2a2a2a; color: #b0bec5; border: 1px solid #4a4a4a; }
@@ -215,6 +216,9 @@
 
     /* Resource picker */
     .resource-picker { padding: 0 16px 10px; }
+    .resource-help { margin: 0 0 7px; color: #8290ad; font-size: 10px; line-height: 1.4; }
+    .hls-manual-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; color: #aab5d0; cursor: pointer; }
+    .hls-manual-toggle input { margin: 0; }
     .resource-controls {
       display: flex;
       align-items: center;
@@ -301,7 +305,7 @@
     <div class="header-icon">📥</div>
     <div class="header-text">
       <h1>GDrive Universal Downloader</h1>
-      <p>v3.7.18 · Auto-detect &amp; download</p>
+      <p>v3.8.0 · Auto-detect &amp; download</p>
     </div>
   </div>
 
@@ -336,6 +340,10 @@
 
     <!-- Universal resource picker (shown for 'universal' type) -->
     <div class="resource-picker" id="resourcePicker" style="display:none">
+      <div class="resource-help" id="hlsPickerHint" style="display:none">
+        <div>Keep one HLS playlist selected by itself. It starts at the highest supported quality using the page title as the filename.</div>
+        <label class="hls-manual-toggle"><input type="checkbox" id="hlsManualOptions"> Choose quality and filename first</label>
+      </div>
       <div class="resource-controls">
         <span class="resource-count" id="resourceCount">0 selected</span>
         <div class="resource-ctrl-btns">
@@ -381,6 +389,8 @@
     · MIT License
   </div>
 
+  <script src="hls-storage.js"></script>
+  <script src="hls-platform.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

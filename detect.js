@@ -21,9 +21,41 @@
 
   window.__gdriveUniversalDownloader = window.__gdriveUniversalDownloader || {
     capturedVideoURLs: new Set(),
+    capturedHlsURLs: new Set(),
     hooksInstalled: false,
   };
   const GUD = window.__gdriveUniversalDownloader;
+  if (!GUD.capturedHlsURLs || typeof GUD.capturedHlsURLs[Symbol.iterator] !== 'function') {
+    GUD.capturedHlsURLs = new Set();
+  }
+
+  // HLS playlist URLs may be visible in the DOM, Resource Timing, or the
+  // early XHR/fetch hook. Keep complete URLs internally (signed query strings
+  // are required for fetching), but never render or log them in the popup.
+  const hlsUrls = new Set();
+  const addHlsUrl = (value, force = false) => {
+    try {
+      const parsed = new URL(value, location.href);
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (force || /\.m3u8$/i.test(parsed.pathname)) &&
+          (hlsUrls.size < 20 || hlsUrls.has(parsed.href))) {
+        parsed.hash = '';
+        hlsUrls.add(parsed.href);
+      }
+    } catch { /* ignore invalid or non-web URLs */ }
+  };
+  addHlsUrl(location.href);
+  for (const value of GUD.capturedHlsURLs) addHlsUrl(value);
+  for (const entry of (typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
+    ? performance.getEntriesByType('resource') : [])) {
+    if (entry && typeof entry.name === 'string') addHlsUrl(entry.name);
+  }
+  for (const element of document.querySelectorAll('video[src], audio[src], source[src], a[href]')) {
+    const value = element.currentSrc || element.src || element.href || element.getAttribute('src') || element.getAttribute('href') || '';
+    const type = (element.type || element.getAttribute('type') || '').toLowerCase();
+    const hasHlsMime = /mpegurl|vnd\.apple\.mpegurl/i.test(type);
+    if (hasHlsMime || /\.m3u8(?:$|[?#])/i.test(value)) addHlsUrl(value, hasHlsMime);
+  }
+  GUD.hlsPlaylists = [...hlsUrls].slice(0, 20);
 
   const blobImgs = [...document.querySelectorAll(SELECTORS.BLOB_PDF)];
 
@@ -149,9 +181,10 @@
 
     const pdfs = [...new Map(pdfEmbeds.map(p => [p.src, p])).values()];
 
-    if (allImages.length > 0 || videos.length > 0 || pdfs.length > 0) {
+    const hls = !SELECTORS.YOUTUBE.test(url) ? [...hlsUrls].map(src => ({ type: 'hls', src })) : [];
+    if (allImages.length > 0 || videos.length > 0 || pdfs.length > 0 || hls.length > 0) {
       type = 'universal';
-      GUD.universalResources = { images: allImages, videos, pdfs };
+      GUD.universalResources = { images: allImages, videos, pdfs, hls };
     }
   }
 

@@ -21,17 +21,16 @@ jobs:
 
       - name: Build extension zip
         run: |
+          bash build.sh
           ZIP_NAME="gdrive-universal-downloader-v${{ steps.version.outputs.VERSION }}.zip"
-          zip -r "$ZIP_NAME" \
-            manifest.json \
-            popup.html \
-            popup.js \
-            downloader.js \
-            detect.js \
-            content-hooks.js \
-            icons/ \
-            lib/ \
-            LICENSE
+          cp chrome.zip "$ZIP_NAME"
+          unzip -tq "$ZIP_NAME"
+          for member in LICENSE hls.html hls-core.js hls-page.js hls-platform.js hls-storage.js lib/mux.js lib/MUX_JS_LICENSE.txt; do
+            if ! unzip -Z -1 "$ZIP_NAME" | grep -F -x -- "$member" >/dev/null; then
+              echo "Release archive is missing required package member: $member" >&2
+              exit 1
+            fi
+          done
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
 
       - name: Extract changelog for this version
