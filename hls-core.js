@@ -316,6 +316,44 @@
     return boxes;
   };
 
+  const MP4_CONTAINER_BOXES = new Map([
+    ['moov', 0], ['trak', 0], ['mdia', 0], ['minf', 0], ['stbl', 0], ['edts', 0],
+    ['dinf', 0], ['mvex', 0], ['moof', 0], ['traf', 0], ['mfra', 0], ['sinf', 0],
+    ['schi', 0], ['tref', 0], ['wave', 0], ['meta', 4],
+  ]);
+
+  // A size-zero MP4 box extends to the end of its containing byte stream. That
+  // is safe while reading one HLS fragment, but not after appending more
+  // fragments to the same output. Make every parsed size-zero header explicit
+  // before the bytes are copied into the combined file.
+  const normalizeMp4BoxSizes = bytes => {
+    if (!(bytes instanceof Uint8Array)) fail('MP4 data is malformed.', 'HLS_UNSUPPORTED');
+    const top = readMp4Boxes(bytes);
+    if (!top.length) fail('MP4 box structure is malformed.', 'HLS_UNSUPPORTED');
+    const result = bytes.slice();
+    const view = viewOf(result);
+    let changed = false;
+    const walk = (start, end) => {
+      const scope = result.subarray(start, end);
+      const boxes = readMp4Boxes(scope);
+      if (!boxes.length && end > start) return;
+      for (const box of boxes) {
+        const offset = start + box.offset;
+        if (view.getUint32(offset, false) === 0) {
+          if (box.size > 0xffffffff) fail('MP4 box exceeds the supported size limit.', 'HLS_LIMIT');
+          view.setUint32(offset, box.size, false);
+          changed = true;
+        }
+        if (!MP4_CONTAINER_BOXES.has(box.type)) continue;
+        const childStart = offset + box.headerSize + MP4_CONTAINER_BOXES.get(box.type);
+        const childEnd = offset + box.size;
+        if (childStart <= childEnd && childEnd <= end) walk(childStart, childEnd);
+      }
+    };
+    walk(0, result.byteLength);
+    return changed ? result : bytes;
+  };
+
   const containsFourCC = (bytes, types) => {
     const signatures = types.map(type => Uint8Array.from(type, char => char.charCodeAt(0)));
     for (let i = 4; i + 4 <= bytes.length; i++) {
@@ -685,6 +723,8 @@
       audioTrackId,
       sourceVideoTrackId: videoTracks[0].trackId,
       sourceAudioTrackId: audioTracks[0].trackId,
+      sourceVideoDefaultSampleSize: readTrexDefaultSampleSize(videoBytes, videoTrex[0], videoTracks[0].trackId),
+      sourceAudioDefaultSampleSize: readTrexDefaultSampleSize(audioBytes, audioTrex[0], audioTracks[0].trackId),
       videoTimescale: videoTracks[0].timescale,
       audioTimescale: audioTracks[0].timescale,
     };
@@ -795,6 +835,14 @@
     return wrapped;
   };
 
+  const readTrexDefaultSampleSize = (bytes, trex, expectedTrackId) => {
+    if (!trex || trex.size < trex.headerSize + 24 ||
+        viewOf(bytes).getUint32(trex.offset + trex.headerSize + 4, false) !== expectedTrackId) {
+      fail('MP4 fragment defaults do not match their track.', 'HLS_UNSUPPORTED');
+    }
+    return viewOf(bytes).getUint32(trex.offset + trex.headerSize + 16, false);
+  };
+
   const validateSeparateVideoInitialization = bytes => {
     const top = readMp4Boxes(bytes);
     const moov = top.find(box => box.type === 'moov');
@@ -813,12 +861,13 @@
     const mvex = childBoxes(bytes, moov).filter(box => box.type === 'mvex');
     if (mvex.length !== 1) fail('Separate video initialization data has no fragment defaults.', 'HLS_UNSUPPORTED');
     const trex = childBoxes(bytes, mvex[0]).filter(box => box.type === 'trex');
-    if (trex.length !== 1 || viewOf(bytes).getUint32(trex[0].offset + trex[0].headerSize + 4, false) !== tracks[0].trackId) {
+    if (trex.length !== 1) {
       fail('Separate video initialization data has invalid fragment defaults.', 'HLS_UNSUPPORTED');
     }
+    return { trackId: tracks[0].trackId, defaultSampleSize: readTrexDefaultSampleSize(bytes, trex[0], tracks[0].trackId) };
   };
 
-  const inspectSeparateFmp4Fragment = (bytes, expectedTrackId, timescale) => {
+  const inspectSeparateFmp4Fragment = (bytes, expectedTrackId, timescale, trexDefaultSampleSize) => {
     if (!(bytes instanceof Uint8Array) || !isValidMp4MediaSegment(bytes)) {
       fail('A separate rendition segment is not a valid fragmented MP4 segment.', 'HLS_UNSUPPORTED');
     }
@@ -850,13 +899,93 @@
       fail('Separate rendition fragments use unsupported track-fragment boxes.', 'HLS_UNSUPPORTED');
     }
     const tfhd = tfhds[0];
-    const tfhdFlags = viewOf(bytes).getUint32(tfhd.offset + tfhd.headerSize, false) & 0xffffff;
-    const trackId = viewOf(bytes).getUint32(tfhd.offset + tfhd.headerSize + 4, false);
+    const view = viewOf(bytes);
+    if (tfhd.size < tfhd.headerSize + 8) fail('Separate rendition track-fragment header is malformed.', 'HLS_UNSUPPORTED');
+    const tfhdFullBox = view.getUint32(tfhd.offset + tfhd.headerSize, false);
+    if ((tfhdFullBox >>> 24) !== 0) fail('Unsupported separate rendition track-fragment version.', 'HLS_UNSUPPORTED');
+    const tfhdFlags = tfhdFullBox & 0xffffff;
+    const trackId = view.getUint32(tfhd.offset + tfhd.headerSize + 4, false);
     if (trackId !== expectedTrackId || (tfhdFlags & 0x000001) || !(tfhdFlags & 0x020000)) {
       fail('Separate rendition fragment track IDs or base offsets are unsupported.', 'HLS_UNSUPPORTED');
     }
-    if (truns.some(box => !(viewOf(bytes).getUint32(box.offset + box.headerSize, false) & 0x000001))) {
-      fail('Separate rendition fragments require explicit sample data offsets.', 'HLS_UNSUPPORTED');
+    const knownTfhdFlags = 0x000002 | 0x000008 | 0x000010 | 0x000020 | 0x010000 | 0x020000;
+    if (tfhdFlags & ~knownTfhdFlags) fail('Separate rendition track-fragment flags are unsupported.', 'HLS_UNSUPPORTED');
+    let tfhdOffset = tfhd.offset + tfhd.headerSize + 8;
+    const tfhdEnd = tfhd.offset + tfhd.size;
+    if (tfhdFlags & 0x000002) tfhdOffset += 4;
+    if (tfhdFlags & 0x000008) tfhdOffset += 4;
+    let tfhdDefaultSampleSize = null;
+    if (tfhdFlags & 0x000010) {
+      if (tfhdOffset + 4 > tfhdEnd) fail('Separate rendition default sample size is malformed.', 'HLS_UNSUPPORTED');
+      tfhdDefaultSampleSize = view.getUint32(tfhdOffset, false);
+      tfhdOffset += 4;
+    }
+    if (tfhdFlags & 0x000020) tfhdOffset += 4;
+    if (tfhdOffset !== tfhdEnd) fail('Separate rendition track-fragment header is malformed.', 'HLS_UNSUPPORTED');
+
+    const mdatStart = mdat.offset + mdat.headerSize;
+    const mdatEnd = mdat.offset + mdat.size;
+    const sampleExtents = [];
+    for (const trun of truns) {
+      if (trun.size < trun.headerSize + 8) fail('Separate rendition sample-run header is malformed.', 'HLS_UNSUPPORTED');
+      const fullBox = view.getUint32(trun.offset + trun.headerSize, false);
+      const version = fullBox >>> 24;
+      const flags = fullBox & 0xffffff;
+      const knownTrunFlags = 0x000001 | 0x000004 | 0x000100 | 0x000200 | 0x000400 | 0x000800;
+      if ((version !== 0 && version !== 1) || (flags & ~knownTrunFlags) || !(flags & 0x000001)) {
+        fail('Separate rendition fragments require supported sample-run data offsets.', 'HLS_UNSUPPORTED');
+      }
+      const sampleCount = view.getUint32(trun.offset + trun.headerSize + 4, false);
+      let cursor = trun.offset + trun.headerSize + 8;
+      const trunEnd = trun.offset + trun.size;
+      if (cursor + 4 > trunEnd) fail('Separate rendition sample-run data offset is malformed.', 'HLS_UNSUPPORTED');
+      const dataOffset = view.getInt32(cursor, false);
+      cursor += 4;
+      if (flags & 0x000004) {
+        if (cursor + 4 > trunEnd) fail('Separate rendition sample-run flags are malformed.', 'HLS_UNSUPPORTED');
+        cursor += 4;
+      }
+      if ((tfhdFlags & 0x010000) && sampleCount) {
+        fail('Empty separate rendition fragments cannot contain samples.', 'HLS_UNSUPPORTED');
+      }
+      const perSampleFieldCount = [0x000100, 0x000200, 0x000400, 0x000800]
+        .filter(flag => flags & flag).length;
+      const perSampleBytes = perSampleFieldCount * 4;
+      const recordsBytes = sampleCount * perSampleBytes;
+      if (!Number.isSafeInteger(recordsBytes) || cursor + recordsBytes !== trunEnd) {
+        fail('Separate rendition sample-run entries are malformed.', 'HLS_UNSUPPORTED');
+      }
+      const sampleSizeOffset = flags & 0x000200 ? (flags & 0x000100 ? 4 : 0) : -1;
+      let payloadBytes = 0;
+      if (sampleSizeOffset >= 0) {
+        if (sampleCount > mdatEnd - mdatStart) fail('Separate rendition sample payload exceeds its media-data box.', 'HLS_UNSUPPORTED');
+        for (let index = 0; index < sampleCount; index++) {
+          const size = view.getUint32(cursor + index * perSampleBytes + sampleSizeOffset, false);
+          if (!size || payloadBytes + size > mdatEnd - mdatStart) {
+            fail('Separate rendition sample payload exceeds its media-data box.', 'HLS_UNSUPPORTED');
+          }
+          payloadBytes += size;
+        }
+      } else {
+        const defaultSize = tfhdDefaultSampleSize ?? trexDefaultSampleSize;
+        if (sampleCount && (!Number.isSafeInteger(defaultSize) || defaultSize <= 0)) {
+          fail('Separate rendition sample sizes have no supported default.', 'HLS_UNSUPPORTED');
+        }
+        payloadBytes = sampleCount * (defaultSize || 0);
+        if (!Number.isSafeInteger(payloadBytes) || payloadBytes > mdatEnd - mdatStart) {
+          fail('Separate rendition sample payload exceeds its media-data box.', 'HLS_UNSUPPORTED');
+        }
+      }
+      const sampleStart = moof.offset + dataOffset;
+      const sampleEnd = sampleStart + payloadBytes;
+      if (sampleStart < mdatStart || sampleStart > mdatEnd || sampleEnd < sampleStart || sampleEnd > mdatEnd) {
+        fail('Separate rendition sample payload points outside its media-data box.', 'HLS_UNSUPPORTED');
+      }
+      sampleExtents.push({ start: sampleStart, end: sampleEnd });
+    }
+    sampleExtents.sort((left, right) => left.start - right.start);
+    if (sampleExtents.some((extent, index) => index > 0 && extent.start < sampleExtents[index - 1].end)) {
+      fail('Separate rendition sample payloads overlap.', 'HLS_UNSUPPORTED');
     }
     const tfdt = tfdts[0];
     const version = mp4FullBoxVersion(bytes, tfdt);
@@ -870,21 +999,31 @@
 
   const remapSeparateFmp4Fragment = (bytes, inspected, outputTrackId, sequenceNumber) => {
     const styp = inspected.top.filter(box => box.type === 'styp').map(box => copyBox(bytes, box));
-    const moofBytes = copyBox(bytes, inspected.moof);
+    const moofBytes = normalizeMp4BoxSizes(copyBox(bytes, inspected.moof));
     patchBoxUint32(moofBytes, inspected.mfhd.offset - inspected.moof.offset + inspected.mfhd.headerSize + 4, sequenceNumber);
     patchBoxUint32(moofBytes, inspected.tfhd.offset - inspected.moof.offset + inspected.tfhd.headerSize + 4, outputTrackId);
-    return concatBytes([...styp, moofBytes, copyBox(bytes, inspected.mdat)]);
+    const mdatBytes = normalizeMp4BoxSizes(copyBox(bytes, inspected.mdat));
+    return concatBytes([...styp, moofBytes, mdatBytes]);
   };
 
   const variantUnsupportedReason = (variant) => {
     if (variant?.videoGroup) return 'separate video renditions are not supported';
     const codecs = (variant?.codecs || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
-    const hasAvc = codecs.some(codec => /^(?:avc1|avc3)(?:\.|$)/.test(codec));
-    const hasAac = codecs.some(codec => /^mp4a\.40\.(?:2|5|29)$/.test(codec));
-    if (codecs.length && !codecs.every(codec =>
-      /^(?:avc1|avc3)(?:\.|$)/.test(codec) || /^mp4a\.40\.(?:2|5|29)$/.test(codec)
-    )) return 'codec is not supported for MP4 output';
-    if (variant?.separateAudio && (!hasAvc || !hasAac)) return 'separate renditions require AVC video and AAC audio';
+    const isAvc = codec => /^(?:avc1|avc3)(?:\.|$)/.test(codec);
+    const isAac = codec => /^mp4a\.40\.(?:2|5|29)$/.test(codec);
+    const isKnownNonAvcVideo = codec => /^(?:hvc1|hev1|vp09|av01|dvhe|dvh1|mp4v|theora)(?:\.|$)/.test(codec);
+    const isAudioCodec = codec => /^(?:mp4a(?:\.|$)|ac-3(?:\.|$)|ec-3(?:\.|$)|ac-4(?:\.|$)|opus(?:\.|$)|flac(?:\.|$)|alac(?:\.|$)|dts[cehlx](?:\.|$)|samr(?:\.|$)|sawb(?:\.|$)|lpcm(?:\.|$)|ulaw(?:\.|$)|alaw(?:\.|$)|mha1(?:\.|$)|mhm1(?:\.|$))/.test(codec);
+    if (variant?.separateAudio) {
+      if (codecs.some(isKnownNonAvcVideo)) return 'video codec is not supported for MP4 output';
+      if (codecs.some(codec => !isAvc(codec) && !isAac(codec) && !isAudioCodec(codec))) {
+        return 'codec is not supported for MP4 output';
+      }
+      // External audio is optional. CODECS may omit it or name a format that
+      // this muxer cannot combine; validate the actual video init segment and
+      // fall back to video-only if the external rendition is incompatible.
+      return '';
+    }
+    if (codecs.length && !codecs.every(codec => isAvc(codec) || isAac(codec))) return 'codec is not supported for MP4 output';
     return '';
   };
 
@@ -991,6 +1130,7 @@
     let outputHasAudio = false;
     const write = async (bytes) => {
       if (!(bytes instanceof Uint8Array) || !bytes.byteLength) fail('Empty media data was returned.', 'HLS_MISSING_SEGMENT');
+      bytes = normalizeMp4BoxSizes(bytes);
       if (!firstOutputWritten) {
         if (!isValidMp4InitializationSegment(bytes)) fail('The playlist did not produce a valid MP4 initialization segment.', 'HLS_INVALID_OUTPUT');
         outputHasAudio = getMp4TrackInfo(bytes).some(track => track.handler === 'soun');
@@ -1013,7 +1153,7 @@
     };
 
     if (isFmp4) {
-      const mapBytes = await fetchBytes(firstMap.url, firstMap.range, signal);
+      const mapBytes = normalizeMp4BoxSizes(await fetchBytes(firstMap.url, firstMap.range, signal));
       totalInputBytes += mapBytes.byteLength;
       if (!isValidMp4InitializationSegment(mapBytes)) fail('The HLS initialization segment is not a compatible MP4 file.', 'HLS_UNSUPPORTED');
       await write(mapBytes);
@@ -1034,7 +1174,7 @@
         if (totalInputBytes > maxOutputBytes) fail('Playlist input exceeds the selected browser storage limit.', 'HLS_LIMIT');
         if (isFmp4) {
           if (!isValidMp4MediaSegment(bytes)) fail('A playlist segment is not a compatible fragmented MP4 segment.', 'HLS_UNSUPPORTED');
-          await write(bytes);
+          await write(normalizeMp4BoxSizes(bytes));
         } else {
           const converted = transmuxer.push(bytes, elapsedSeconds, segment.discontinuity);
           if (writtenSegments === 0) await write(converted.initSegment);
@@ -1089,14 +1229,14 @@
     }
     if (signal?.aborted) fail('Download cancelled.', 'HLS_CANCELLED');
 
-    let videoMapBytes = await fetchBytes(videoPlaylist.segments[0].map.url, videoPlaylist.segments[0].map.range, signal);
+    let videoMapBytes = normalizeMp4BoxSizes(await fetchBytes(videoPlaylist.segments[0].map.url, videoPlaylist.segments[0].map.range, signal));
     if (!(videoMapBytes instanceof Uint8Array) || videoMapBytes.byteLength > LIMITS.MAX_SEGMENT_BYTES) {
       fail('The video initialization segment exceeds the supported size limit.', 'HLS_LIMIT');
     }
-    validateSeparateVideoInitialization(videoMapBytes);
+    const videoDefaults = validateSeparateVideoInitialization(videoMapBytes);
     let audioMapBytes;
     try {
-      audioMapBytes = await fetchBytes(audioPlaylist.segments[0].map.url, audioPlaylist.segments[0].map.range, signal);
+      audioMapBytes = normalizeMp4BoxSizes(await fetchBytes(audioPlaylist.segments[0].map.url, audioPlaylist.segments[0].map.range, signal));
     } catch (error) {
       throw markAudioFallbackError(error);
     }
@@ -1157,6 +1297,7 @@
         sourceTrackId: initialization.sourceVideoTrackId,
         outputTrackId: initialization.videoTrackId,
         timescale: initialization.videoTimescale,
+        defaultSampleSize: initialization.sourceVideoDefaultSampleSize ?? videoDefaults.defaultSampleSize,
         nextIndex: 0,
         lastDecodeTime: -1,
         queue: [],
@@ -1167,6 +1308,7 @@
         sourceTrackId: initialization.sourceAudioTrackId,
         outputTrackId: initialization.audioTrackId,
         timescale: initialization.audioTimescale,
+        defaultSampleSize: initialization.sourceAudioDefaultSampleSize,
         nextIndex: 0,
         lastDecodeTime: -1,
         queue: [],
@@ -1183,7 +1325,7 @@
       if (!(bytes instanceof Uint8Array) || bytes.byteLength > LIMITS.MAX_SEGMENT_BYTES) {
         fail('A media segment exceeds the supported size limit.', 'HLS_LIMIT');
       }
-      const inspected = inspectSeparateFmp4Fragment(bytes, track.sourceTrackId, track.timescale);
+      const inspected = inspectSeparateFmp4Fragment(bytes, track.sourceTrackId, track.timescale, track.defaultSampleSize);
       return { track, segment, bytes, inspected };
     };
 

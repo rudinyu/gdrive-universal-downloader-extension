@@ -8,9 +8,11 @@
   'use strict';
 
   const DB_NAME = 'gud-hls-jobs';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const IDB_OUTPUT_MAX_BYTES = 192 * 1024 * 1024;
   const OPFS_OUTPUT_MAX_BYTES = 4 * 1024 * 1024 * 1024;
+  const STALE_JOB_TTL_MS = 24 * 60 * 60 * 1000;
+  const CLEANUP_LIMITS = Object.freeze({ jobs: 10, scannedPerIndex: 250, opfsEntries: 200 });
   const outputFilename = jobId => `gud-hls-${jobId}.mp4`;
   const makeError = (message, code, cause) => Object.assign(new Error(message), { code, cause });
   const isOpfsUnavailable = error => ['NotSupportedError', 'NotAllowedError', 'SecurityError', 'TypeError'].includes(error?.name);
@@ -124,19 +126,35 @@
       catch (error) { if (error?.name !== 'NotFoundError') throw error; }
     };
 
-    return { createOutput, appendOutputChunk, finishOutput, deleteOutput };
+    return { createOutput, appendOutputChunk, finishOutput, deleteOutput, hasSession: jobId => sessions.has(jobId) };
   };
 
   const open = () => new Promise((resolve, reject) => {
     const indexedDbApi = root?.indexedDB;
     if (typeof indexedDbApi === 'undefined') return reject(new Error('IndexedDB is unavailable.'));
     const request = indexedDbApi.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = event => {
       const db = request.result;
-      if (!db.objectStoreNames.contains('jobs')) db.createObjectStore('jobs', { keyPath: 'id' });
+      const jobs = db.objectStoreNames.contains('jobs')
+        ? request.transaction.objectStore('jobs')
+        : db.createObjectStore('jobs', { keyPath: 'id' });
+      if (!jobs.indexNames.contains('byStatusCreatedAt')) jobs.createIndex('byStatusCreatedAt', ['status', 'createdAt']);
+      if (!jobs.indexNames.contains('byStatusHeartbeatAt')) jobs.createIndex('byStatusHeartbeatAt', ['status', 'heartbeatAt']);
       if (!db.objectStoreNames.contains('chunks')) {
         const chunks = db.createObjectStore('chunks', { keyPath: ['jobId', 'offset'] });
         chunks.createIndex('byJob', 'jobId', { unique: false });
+      }
+      if (event.oldVersion < 2) {
+        const cursorRequest = jobs.openCursor();
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) return;
+          const job = cursor.value;
+          if (job.status === 'running' && !Number.isFinite(job.heartbeatAt)) {
+            cursor.update({ ...job, heartbeatAt: Date.now() });
+          }
+          cursor.continue();
+        };
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -161,11 +179,22 @@
       : new Error('HLS job storage transaction was cancelled.'));
   });
 
+  const isStaleJob = (job, now = Date.now()) => {
+    if (!job || !Number.isFinite(now)) return false;
+    const timestamp = job.status === 'running'
+      ? Number(job.heartbeatAt ?? job.startedAt ?? job.createdAt)
+      : Number(job.createdAt);
+    return Number.isFinite(timestamp) && timestamp > 0 && now - timestamp >= STALE_JOB_TTL_MS;
+  };
+
   const putJob = async job => {
     const db = await open();
     try {
       const transaction = db.transaction('jobs', 'readwrite');
-      transaction.objectStore('jobs').put(job);
+      transaction.objectStore('jobs').put({
+        ...job,
+        ...(job.status === 'running' ? { heartbeatAt: Number(job.heartbeatAt) || Date.now() } : {}),
+      });
       await transactionDone(transaction);
     } finally { db.close(); }
   };
@@ -187,7 +216,11 @@
       const store = transaction.objectStore('jobs');
       const request = store.get(id);
       request.onsuccess = () => {
-        if (request.result) store.put({ ...request.result, ...updates });
+        if (request.result) {
+          const job = { ...request.result, ...updates };
+          if (job.status === 'running') job.heartbeatAt = Date.now();
+          store.put(job);
+        }
       };
       await transactionDone(transaction);
     } finally { db.close(); }
@@ -241,6 +274,92 @@
     }
   };
 
+  const collectStaleJobIds = async now => {
+    const db = await open();
+    try {
+      const candidates = [];
+      const cutoff = now - STALE_JOB_TTL_MS;
+      const groups = [
+        { index: 'byStatusCreatedAt', status: 'queued' },
+        { index: 'byStatusCreatedAt', status: 'failed' },
+        { index: 'byStatusHeartbeatAt', status: 'running' },
+      ];
+      for (const group of groups) {
+        if (candidates.length >= CLEANUP_LIMITS.jobs) break;
+        const transaction = db.transaction('jobs', 'readonly');
+        const done = transactionDone(transaction);
+        void done.catch(() => {});
+        const store = transaction.objectStore('jobs');
+        const index = store.index(group.index);
+        let scanned = 0;
+        await new Promise((resolve, reject) => {
+          const range = root.IDBKeyRange.bound([group.status, 0], [group.status, cutoff]);
+          const request = index.openCursor(range);
+          request.onerror = () => reject(request.error || new Error('Could not enumerate stale HLS jobs.'));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor || scanned >= CLEANUP_LIMITS.scannedPerIndex || candidates.length >= CLEANUP_LIMITS.jobs) {
+              resolve();
+              return;
+            }
+            scanned++;
+            if (isStaleJob(cursor.value, now) && /^[0-9a-f-]{30,40}$/i.test(cursor.value.id || '')) {
+              candidates.push(cursor.value.id);
+            }
+            cursor.continue();
+          };
+        });
+        await done;
+      }
+      return [...new Set(candidates)];
+    } finally { db.close(); }
+  };
+
+  const makeOrphanOutputCleaner = ({ getDirectory, getJob, deleteOutput, hasSession, maxEntries = CLEANUP_LIMITS.opfsEntries } = {}) =>
+    async (now = Date.now()) => {
+      if (typeof getDirectory !== 'function') return 0;
+      let directory;
+      try { directory = await getDirectory(); } catch { return 0; }
+      if (typeof directory?.entries !== 'function') return 0;
+      let scanned = 0;
+      let removed = 0;
+      for await (const [name, handle] of directory.entries()) {
+        if (scanned >= maxEntries) break;
+        scanned++;
+        const match = /^gud-hls-([0-9a-f-]{30,40})\.mp4$/i.exec(name);
+        if (!match || hasSession?.(match[1])) continue;
+        if (typeof getJob !== 'function') continue;
+        let job;
+        try { job = await getJob(match[1]); }
+        catch { continue; }
+        if (job) continue;
+        let file;
+        try { file = await handle.getFile(); } catch { continue; }
+        // Keep recent or uninspectable files: a newly created output may be in
+        // the short handoff window before its job record is visible.
+        if (!Number.isFinite(file?.lastModified) || now - file.lastModified < STALE_JOB_TTL_MS) continue;
+        await deleteOutput?.(match[1]).catch(() => {});
+        removed++;
+      }
+      return removed;
+    };
+
+  const cleanupOrphanOutputs = makeOrphanOutputCleaner({
+    getDirectory: () => root?.navigator?.storage?.getDirectory?.(),
+    getJob,
+    deleteOutput: outputManager.deleteOutput,
+    hasSession: outputManager.hasSession,
+  });
+
+  const cleanupStaleJobs = async (now = Date.now()) => {
+    const staleIds = await collectStaleJobIds(now);
+    for (const id of staleIds) await deleteJob(id).catch(() => {});
+    const orphanOutputs = await cleanupOrphanOutputs(now);
+    return { jobs: staleIds.length, orphanOutputs };
+  };
+
+  if (root?.indexedDB) void cleanupStaleJobs().catch(() => {});
+
   return {
     putJob,
     getJob,
@@ -250,5 +369,10 @@
     deleteJob,
     ...outputManager,
     createOutputManager: makeOutputManager,
+    cleanupStaleJobs,
+    isStaleJob,
+    makeOrphanOutputCleaner,
+    CLEANUP_LIMITS,
+    STALE_JOB_TTL_MS,
   };
 });

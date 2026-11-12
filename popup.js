@@ -480,7 +480,7 @@ const renderResourcePicker = (resources) => {
 
       const cb = document.createElement('input');
       cb.type    = 'checkbox';
-      cb.checked = mediaType !== 'hls' || !hasOtherResourceTypes;
+      cb.checked = mediaType !== 'hls' || (!hasOtherResourceTypes && i === 0);
 
       const icon = document.createElement('span');
       icon.className   = 'ri-icon';
@@ -502,8 +502,29 @@ const renderResourcePicker = (resources) => {
       if (mediaType === 'image') {
         meta.textContent = item.w > 0 ? `${item.w} × ${item.h}` : item.source === 'performance' ? 'page resource' : 'preload';
       } else if (mediaType === 'hls') {
-        try { meta.textContent = `HLS playlist · ${new URL(item.src).hostname}`; }
-        catch { meta.textContent = 'HLS playlist'; }
+        try {
+          const parsed = new URL(item.src);
+          const rawParts = parsed.pathname.split('/').filter(Boolean).map(part => {
+            try { return decodeURIComponent(part); } catch { return part; }
+          });
+          const roleParts = rawParts.join('/').toLowerCase();
+          const role = /(^|[\/_-])audio(s)?([\/_-]|\.|$)|sound|aac/.test(roleParts)
+            ? 'Audio rendition'
+            : /(^|[\/_-])(video(s)?|variant(s)?|quality)([\/_-]|\.|$)/.test(roleParts)
+              ? 'Video playlist'
+              : /(^|[\/_-])(master|manifest|multivariant|main)([\/_-]|\.|$)/.test(roleParts)
+                ? 'Master playlist'
+                : 'HLS playlist';
+          const safeParts = rawParts.slice(-3).map(part => {
+            const normalized = part.toLowerCase();
+            const looksLikePlaylist = /^(?:master|main|manifest|multivariant|playlist|index|hls|audio|sound|aac|video|videos|variant|variants|quality|stream|streams)(?:[-_.](?:[a-z]{2,3}|\d{3,4}p|\d+))?(?:\.m3u8)?$/.test(normalized) ||
+              /^\d{3,4}p(?:\.m3u8)?$/.test(normalized) || /^[a-z]{2,3}\.m3u8$/.test(normalized);
+            if (!looksLikePlaylist) return '…';
+            return normalized.replace(/[^a-z0-9._-]/g, '_').slice(0, 32);
+          });
+          const safePath = safeParts.length ? `/${safeParts.join('/')}` : '/';
+          meta.textContent = `${role} · ${parsed.hostname} · ${safePath}`;
+        } catch { meta.textContent = 'HLS playlist'; }
       } else {
         meta.textContent = mediaType.toUpperCase();
       }
@@ -517,6 +538,15 @@ const renderResourcePicker = (resources) => {
 
       div.addEventListener('click', (e) => {
         if (e.target !== cb) cb.checked = !cb.checked;
+        if (cb.checked && mediaType === 'hls') {
+          resourceList.querySelectorAll('.resource-item input[type="checkbox"]').forEach(other => {
+            if (other !== cb) other.checked = false;
+          });
+        } else if (cb.checked) {
+          resourceList.querySelectorAll('.resource-item[data-type="hls"] input[type="checkbox"]').forEach(other => {
+            other.checked = false;
+          });
+        }
         updateResourceCount();
       });
     });
@@ -918,7 +948,14 @@ scaleSlider.addEventListener('input',   () => scaleVal.textContent   = parseFloa
 qualitySlider.addEventListener('input', () => qualityVal.textContent = parseFloat(qualitySlider.value).toFixed(2));
 
 selectAllBtn.addEventListener('click', () => {
-  resourceList.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+  const otherItems = [...resourceList.querySelectorAll('.resource-item:not([data-type="hls"]) input[type="checkbox"]')];
+  const hlsItems = [...resourceList.querySelectorAll('.resource-item[data-type="hls"] input[type="checkbox"]')];
+  if (otherItems.length) {
+    otherItems.forEach(cb => cb.checked = true);
+    hlsItems.forEach(cb => cb.checked = false);
+  } else {
+    hlsItems.forEach((cb, index) => cb.checked = index === 0);
+  }
   updateResourceCount();
 });
 selectNoneBtn.addEventListener('click', () => {
